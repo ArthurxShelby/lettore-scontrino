@@ -1,3 +1,4 @@
+import base64
 from datetime import datetime, timedelta
 import io
 import os
@@ -14,6 +15,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import Client, create_client
 
 # Configurazione della pagina Streamlit
@@ -397,32 +399,76 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🔍 Riconciliazione Bancaria",
 ])
 
-# TAB 1: ACQUISIZIONE FOTO OTTIMIZZATA
+# TAB 1: ACQUISIZIONE FOTO OTTIMIZZATA (WEBCAM NATIVA HTML5 + UPLOAD)
 with tab1:
-  st.subheader("📷 Carica o Scatta Scontrino")
+  st.subheader("📷 Acquisizione Scontrino")
 
   modalita_input = st.radio(
       "Scegli modalità di acquisizione:",
-      ["📁 Carica File Immagine", "📷 Usa Fotocamera"],
+      ["📁 Carica File Immagine", "📷 Scatta da Fotocamera Web"],
       horizontal=True,
   )
 
-  foto_scontrino = None
+  foto_scontrino_bytes = None
 
   if modalita_input == "📁 Carica File Immagine":
-    foto_scontrino = st.file_uploader(
+    file_upload = st.file_uploader(
         "Carica una foto dello scontrino", type=["jpg", "jpeg", "png", "webp"]
     )
+    if file_upload is not None:
+      foto_scontrino_bytes = file_upload.read()
   else:
-    foto_scontrino = st.camera_input("Scatta foto allo scontrino")
+    st.write(
+        "Inquadra lo scontrino e clicca su **'Scatta Foto'** per catturare"
+        " l'immagine:"
+    )
 
-  if foto_scontrino is not None:
-    immagine = Image.open(foto_scontrino)
+    # Componente Webcam HTML5 nativo che bypassa i blocchi iframe
+    camera_html = """
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
+            <video id="webcam" autoplay playsinline style="width: 100%; max-width: 500px; border-radius: 10px; border: 2px solid #555;"></video>
+            <button id="snap-btn" style="padding: 10px 20px; font-size: 16px; background-color: #FF4B4B; color: white; border: none; border-radius: 5px; cursor: pointer;">📸 Scatta Foto</button>
+            <canvas id="canvas" style="display:none;"></canvas>
+        </div>
+
+        <script>
+            const video = document.getElementById('webcam');
+            const canvas = document.getElementById('canvas');
+            const snapBtn = document.getElementById('snap-btn');
+
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+                .then(stream => { video.srcObject = stream; })
+                .catch(err => { console.error("Errore webcam:", err); });
+
+            snapBtn.addEventListener('click', () => {
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 480;
+                const context = canvas.getContext('2d');
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = canvas.toDataURL('image/jpeg');
+                
+                window.parent.postMessage({ type: 'streamlit:setComponentValue', value: imageData }, '*');
+            });
+        </script>
+        """
+
+    img_data_base64 = components.html(camera_html, height=420)
+
+    if img_data_base64:
+      if isinstance(img_data_base64, str) and "data:image" in img_data_base64:
+        header, encoded = img_data_base64.split(",", 1)
+        foto_scontrino_bytes = base64.b64decode(encoded)
+
+  # ANALISI ED ELABORAZIONE IMMAGINE SCONTRINO
+  if foto_scontrino_bytes is not None:
+    immagine = Image.open(io.BytesIO(foto_scontrino_bytes))
     immagine.thumbnail((1024, 1024))
-    st.image(immagine, caption="Scontrino acquisito", use_container_width=True)
+    st.image(
+        immagine, caption="Scontrino pronto per l'analisi", use_container_width=True
+    )
 
-    if st.button("Analizza e Salva come Uscita", type="primary"):
-      with st.spinner("Analisi veloce in corso..."):
+    if st.button("⚡ Analizza e Salva come Uscita", type="primary"):
+      with st.spinner("Analisi veloce in corso con Gemini..."):
         api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
             "GEMINI_API_KEY"
         )
@@ -741,7 +787,7 @@ with tab5:
       "Carica File Estratto Conto (.csv o .xlsx)", type=["csv", "xlsx"]
   )
 
-  # AZZERAMENTO DATI SE IL FILE VIENE ELIMINATO DALL'UPLOADER
+  # AZZERAMENTO AUTOMATICO SE IL FILE VIENE ELIMINATO DALL'UPLOADER
   if file_banca is None:
     if "esito_riconciliazione" in st.session_state:
       del st.session_state["esito_riconciliazione"]
@@ -773,6 +819,7 @@ with tab5:
       else:
         df_banca = pd.read_excel(file_banca)
 
+      # Gestione colonne duplicate
       cols = pd.Series(df_banca.columns)
       for dup in cols[cols.duplicated()].unique():
         cols[cols == dup] = [
