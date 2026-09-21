@@ -1,25 +1,18 @@
-import base64
 from datetime import datetime, timedelta
 import io
 import os
 import re
-from typing import List, Optional
 
-from google import genai
-from google.genai import types
 import pandas as pd
-from PIL import Image
-from pydantic import BaseModel, Field
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
-import streamlit.components.v1 as components
 from supabase import Client, create_client
 
 # Configurazione della pagina Streamlit
-st.set_page_config(page_title="Gestione Bilancio & Scontrini", layout="wide")
+st.set_page_config(page_title="Gestione Bilancio", layout="wide")
 
 
 # --- SISTEMA DI AUTENTICAZIONE CON PASSWORD ---
@@ -81,28 +74,6 @@ def init_supabase() -> Client:
 
 
 supabase = init_supabase()
-
-
-# Schemi Pydantic per i dati strutturati
-class ScontrinoData(BaseModel):
-  nome_negozio: str = Field(description="Nome dell'esercente")
-  data: Optional[str] = Field(
-      default=None,
-      description="Data dello scontrino (YYYY-MM-DD) se visibile, altrimenti null",
-  )
-  totale_euro: float = Field(description="Importo totale finale pagato in Euro")
-
-
-class VocaleData(BaseModel):
-  negozio: str = Field(
-      description="Descrizione della spesa/entrata o nome del negozio"
-  )
-  totale: float = Field(description="Importo in euro menzionato nell'audio")
-  tipo: str = Field(description="Tipo: 'Entrata' o 'Uscita'")
-  data: Optional[str] = Field(
-      default=None,
-      description="Data in formato YYYY-MM-DD se specificata, altrimenti null",
-  )
 
 
 # --- FUNZIONI SUPABASE ---
@@ -391,285 +362,14 @@ def genera_pdf_riconciliazione(
 
 
 # --- INTERFACCIA APP STREAMLIT ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📷 Scansiona Scontrino",
-    "🎤 Inserimento Vocale",
+tab1, tab2, tab3 = st.tabs([
     "✍️ Inserimento Manuale",
     "📊 Bilancio & Export PDF",
     "🔍 Riconciliazione Bancaria",
 ])
 
-# TAB 1: ACQUISIZIONE FOTO CON FOTOCAMERA HTML5 DEDICATA PER SFIDARE I BLOCCHI IFRAME
+# TAB 1: INSERIMENTO MANUALE
 with tab1:
-  st.subheader("📷 Acquisizione Scontrino")
-
-  modalita_input = st.radio(
-      "Scegli modalità di acquisizione:",
-      ["📁 Carica File Immagine", "📷 Scatta con Fotocamera Web"],
-      horizontal=True,
-  )
-
-  foto_scontrino_bytes = None
-
-  if modalita_input == "📁 Carica File Immagine":
-    file_upload = st.file_uploader(
-        "Carica una foto dello scontrino", type=["jpg", "jpeg", "png", "webp"]
-    )
-    if file_upload is not None:
-      foto_scontrino_bytes = file_upload.read()
-  else:
-    st.write(
-        "Accetta il permesso della fotocamera nel browser, inquadra lo scontrino"
-        " e clicca **'📸 Scatta Foto'**:"
-    )
-
-    # Componente HTML5 con permessi espliciti per sbloccare l'hardware video
-    camera_html_code = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                .cam-container {
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    gap: 12px;
-                    width: 100%;
-                    max-width: 500px;
-                    margin: 0 auto;
-                }
-                video {
-                    width: 100%;
-                    border-radius: 8px;
-                    background: #111;
-                    border: 2px solid #444;
-                }
-                button {
-                    padding: 12px 24px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    background-color: #FF4B4B;
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    cursor: pointer;
-                    transition: 0.2s;
-                }
-                button:hover {
-                    background-color: #E03E3E;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="cam-container">
-                <video id="video" autoplay playsinline></video>
-                <button id="snap">📸 Scatta Foto</button>
-                <canvas id="canvas" style="display:none;"></canvas>
-            </div>
-
-            <script>
-                const video = document.getElementById('video');
-                const canvas = document.getElementById('canvas');
-                const snapBtn = document.getElementById('snap');
-
-                async function startCamera() {
-                    try {
-                        const stream = await navigator.mediaDevices.getUserMedia({ 
-                            video: { facingMode: "environment" }, 
-                            audio: false 
-                        });
-                        video.srcObject = stream;
-                    } catch (err) {
-                        console.error("Errore fotocamera: ", err);
-                    }
-                }
-
-                snapBtn.addEventListener('click', () => {
-                    canvas.width = video.videoWidth || 640;
-                    canvas.height = video.videoHeight || 480;
-                    const context = canvas.getContext('2d');
-                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    const imageData = canvas.toDataURL('image/jpeg', 0.9);
-                    
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        value: imageData
-                    }, '*');
-                });
-
-                startCamera();
-            </script>
-        </body>
-        </html>
-        """
-
-    # Carica la fotocamera nell'iframe con il permesso esplicito 'camera'
-    img_data_base64 = components.html(
-        camera_html_code, height=450, scrolling=False
-    )
-
-    if img_data_base64 and isinstance(img_data_base64, str):
-      if "data:image" in img_data_base64:
-        header, encoded = img_data_base64.split(",", 1)
-        foto_scontrino_bytes = base64.b64decode(encoded)
-
-  # ELABORAZIONE IMMAGINE ED ESTRAZIONE AI CON GEMINI
-  if foto_scontrino_bytes is not None:
-    immagine = Image.open(io.BytesIO(foto_scontrino_bytes))
-    immagine.thumbnail((1024, 1024))
-    st.image(
-        immagine, caption="Scontrino acquisito", use_container_width=True
-    )
-
-    if st.button("⚡ Analizza e Salva come Uscita", type="primary"):
-      with st.spinner("Analisi in corso con Gemini..."):
-        api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
-            "GEMINI_API_KEY"
-        )
-        client = genai.Client(api_key=api_key)
-
-        config = types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ScontrinoData,
-            temperature=0.1,
-        )
-        prompt = (
-            "Analizza lo scontrino. Estrai nome negozio, data (YYYY-MM-DD) e"
-            " totale finale in euro. Se la data non è visibile, usa null."
-        )
-
-        modelli = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-        dati = None
-
-        for modello in modelli:
-          try:
-            response = client.models.generate_content(
-                model=modello, contents=[immagine, prompt], config=config
-            )
-            dati = response.parsed
-            if dati is not None:
-              break
-          except Exception:
-            continue
-
-        if dati is not None:
-          data_finale = (
-              dati.data if dati.data else datetime.now().strftime("%Y-%m-%d")
-          )
-          salva_movimento(
-              dati.nome_negozio, data_finale, dati.totale_euro, tipo="Uscita"
-          )
-
-          st.success("Scontrino salvato in Supabase!")
-          st.metric("Spesa Registrata", f"€ {dati.totale_euro:.2f}")
-          st.write(f"**Negozio:** {dati.nome_negozio} | **Data:** {data_finale}")
-        else:
-          st.error(
-              "Impossibile analizzare l'immagine. Riprova tra qualche secondo."
-          )
-
-# TAB 2: INSERIMENTO VOCALE OTTIMIZZATO
-with tab2:
-  st.subheader("Registra una nota vocale")
-  st.write(
-      "Esempio: *'Speso 15.50 euro al bar per colazione'* o *'Incassato 200 euro"
-      " consulenza'*"
-  )
-
-  if "audio_key" not in st.session_state:
-    st.session_state["audio_key"] = 0
-
-  if "dati_vocali_temp" not in st.session_state:
-    st.session_state["dati_vocali_temp"] = None
-
-  audio_registrato = st.audio_input(
-      "Premi il microfono per registrare",
-      key=f"audio_input_{st.session_state['audio_key']}",
-  )
-
-  if audio_registrato is not None:
-    if st.button("🎙️ Analizza Audio", type="primary"):
-      with st.spinner("Analisi audio rapida..."):
-        api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
-            "GEMINI_API_KEY"
-        )
-        client = genai.Client(api_key=api_key)
-
-        audio_bytes = audio_registrato.read()
-        mime_type = audio_registrato.type or "audio/wav"
-        part_audio = types.Part.from_bytes(
-            data=audio_bytes, mime_type=mime_type
-        )
-
-        config = types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=VocaleData,
-            temperature=0.1,
-        )
-
-        prompt_vocale = (
-            "Estrai dall'audio: descrizione spesa/entrata, importo in euro,"
-            " tipo ('Entrata' o 'Uscita') e data YYYY-MM-DD (se menzionata,"
-            " altrimenti null)."
-        )
-
-        modelli = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-        dati_vocali = None
-
-        for modello in modelli:
-          try:
-            response = client.models.generate_content(
-                model=modello, contents=[part_audio, prompt_vocale], config=config
-            )
-            dati_vocali = response.parsed
-            if dati_vocali is not None:
-              break
-          except Exception:
-            continue
-
-        if dati_vocali is not None:
-          st.session_state["dati_vocali_temp"] = {
-              "negozio": dati_vocali.negozio,
-              "totale": dati_vocali.totale,
-              "tipo": dati_vocali.tipo,
-              "data": (
-                  dati_vocali.data
-                  if dati_vocali.data
-                  else datetime.now().strftime("%Y-%m-%d")
-              ),
-          }
-        else:
-          st.error(
-              "Errore nell'elaborazione dell'audio. Quota momentaneamente"
-              " satura, riprova tra poco."
-          )
-
-  if st.session_state["dati_vocali_temp"] is not None:
-    dati = st.session_state["dati_vocali_temp"]
-    st.info("🔍 **Anteprima Dati Riconosciuti:**")
-
-    col_v1, col_v2 = st.columns(2)
-    with col_v1:
-      st.write(f"**Descrizione:** {dati['negozio']}")
-      st.write(f"**Tipo:** {dati['tipo']}")
-    with col_v2:
-      st.write(f"**Importo:** € {dati['totale']:.2f}")
-      st.write(f"**Data:** {dati['data']}")
-
-    if st.button("💾 Conferma e Salva Movimento", type="primary"):
-      salva_movimento(
-          negozio=dati["negozio"],
-          data=dati["data"],
-          totale=dati["totale"],
-          tipo=dati["tipo"],
-      )
-      st.session_state["dati_vocali_temp"] = None
-      st.session_state["audio_key"] += 1
-      st.success("Movimento salvato!")
-      st.rerun()
-
-# TAB 3: INSERIMENTO MANUALE
-with tab3:
   st.subheader("Inserisci un'Entrata o un'Uscita")
 
   with st.form("form_inserimento_manuale", clear_on_submit=True):
@@ -698,8 +398,8 @@ with tab3:
         salva_movimento(m_negozio, data_str, float(m_totale), tipo=tipo_str)
         st.success(f"Registrata {tipo_str}: **{m_negozio}** - € {m_totale:.2f}")
 
-# TAB 4: BILANCIO E TABELLA
-with tab4:
+# TAB 2: BILANCIO E TABELLA
+with tab2:
   storico_attuale = carica_storico()
 
   if storico_attuale:
@@ -829,8 +529,8 @@ with tab4:
   else:
     st.info("Nessun movimento registrato in Supabase.")
 
-# TAB 5: RICONCILIAZIONE BANCARIA (CSV E EXCEL)
-with tab5:
+# TAB 3: RICONCILIAZIONE BANCARIA (CSV E EXCEL)
+with tab3:
   st.subheader("🔍 Riconciliazione tra Estratto Conto Bancario e App")
   st.write(
       "Carica il file dell'estratto conto scaricato dalla tua banca (in"
