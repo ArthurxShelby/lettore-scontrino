@@ -15,6 +15,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import Client, create_client
 
 # Configurazione della pagina Streamlit
@@ -398,13 +399,13 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🔍 Riconciliazione Bancaria",
 ])
 
-# TAB 1: ACQUISIZIONE FOTO OTTIMIZZATA
+# TAB 1: ACQUISIZIONE FOTO CON FOTOCAMERA HTML5 DEDICATA PER SFIDARE I BLOCCHI IFRAME
 with tab1:
   st.subheader("📷 Acquisizione Scontrino")
 
   modalita_input = st.radio(
       "Scegli modalità di acquisizione:",
-      ["📁 Carica File Immagine", "📷 Fotocamera Integrata"],
+      ["📁 Carica File Immagine", "📷 Scatta con Fotocamera Web"],
       horizontal=True,
   )
 
@@ -417,31 +418,111 @@ with tab1:
     if file_upload is not None:
       foto_scontrino_bytes = file_upload.read()
   else:
-    if "cam_key" not in st.session_state:
-      st.session_state["cam_key"] = 0
-
-    col_c1, col_c2 = st.columns([1, 1])
-    with col_c1:
-      if st.button("🔄 Riavvia / Sblocca Fotocamera", use_container_width=True):
-        st.session_state["cam_key"] += 1
-        st.rerun()
-
-    camera_photo = st.camera_input(
-        "Scatta foto allo scontrino", key=f"cam_input_{st.session_state['cam_key']}"
+    st.write(
+        "Accetta il permesso della fotocamera nel browser, inquadra lo scontrino"
+        " e clicca **'📸 Scatta Foto'**:"
     )
-    if camera_photo is not None:
-      foto_scontrino_bytes = camera_photo.read()
 
-  # ANALISI ED ELABORAZIONE IMMAGINE SCONTRINO
+    # Componente HTML5 con permessi espliciti per sbloccare l'hardware video
+    camera_html_code = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                .cam-container {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 12px;
+                    width: 100%;
+                    max-width: 500px;
+                    margin: 0 auto;
+                }
+                video {
+                    width: 100%;
+                    border-radius: 8px;
+                    background: #111;
+                    border: 2px solid #444;
+                }
+                button {
+                    padding: 12px 24px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    background-color: #FF4B4B;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    transition: 0.2s;
+                }
+                button:hover {
+                    background-color: #E03E3E;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="cam-container">
+                <video id="video" autoplay playsinline></video>
+                <button id="snap">📸 Scatta Foto</button>
+                <canvas id="canvas" style="display:none;"></canvas>
+            </div>
+
+            <script>
+                const video = document.getElementById('video');
+                const canvas = document.getElementById('canvas');
+                const snapBtn = document.getElementById('snap');
+
+                async function startCamera() {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ 
+                            video: { facingMode: "environment" }, 
+                            audio: false 
+                        });
+                        video.srcObject = stream;
+                    } catch (err) {
+                        console.error("Errore fotocamera: ", err);
+                    }
+                }
+
+                snapBtn.addEventListener('click', () => {
+                    canvas.width = video.videoWidth || 640;
+                    canvas.height = video.videoHeight || 480;
+                    const context = canvas.getContext('2d');
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imageData = canvas.toDataURL('image/jpeg', 0.9);
+                    
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        value: imageData
+                    }, '*');
+                });
+
+                startCamera();
+            </script>
+        </body>
+        </html>
+        """
+
+    # Carica la fotocamera nell'iframe con il permesso esplicito 'camera'
+    img_data_base64 = components.html(
+        camera_html_code, height=450, scrolling=False
+    )
+
+    if img_data_base64 and isinstance(img_data_base64, str):
+      if "data:image" in img_data_base64:
+        header, encoded = img_data_base64.split(",", 1)
+        foto_scontrino_bytes = base64.b64decode(encoded)
+
+  # ELABORAZIONE IMMAGINE ED ESTRAZIONE AI CON GEMINI
   if foto_scontrino_bytes is not None:
     immagine = Image.open(io.BytesIO(foto_scontrino_bytes))
     immagine.thumbnail((1024, 1024))
     st.image(
-        immagine, caption="Scontrino pronto per l'analisi", use_container_width=True
+        immagine, caption="Scontrino acquisito", use_container_width=True
     )
 
     if st.button("⚡ Analizza e Salva come Uscita", type="primary"):
-      with st.spinner("Analisi veloce in corso con Gemini..."):
+      with st.spinner("Analisi in corso con Gemini..."):
         api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
             "GEMINI_API_KEY"
         )
