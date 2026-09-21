@@ -745,6 +745,12 @@ with tab5:
   file_banca = st.file_uploader(
       "Carica File Estratto Conto (.csv o .xlsx)", type=["csv", "xlsx"]
   )
+
+  # AZZERAMENTO DATI SE IL FILE VIENE ELIMINATO DALL'UPLOADER
+  if file_banca is None:
+    if "esito_riconciliazione" in st.session_state:
+      del st.session_state["esito_riconciliazione"]
+
   tolleranza_giorni = st.slider(
       "Tolleranza Giorni Data (per la contabilizzazione bancaria)", 0, 7, 3
   )
