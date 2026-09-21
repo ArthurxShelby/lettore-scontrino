@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 import io
 import os
-from typing import List, Optional
+from typing import Optional, List
 
 from google import genai
 from google.genai import types
@@ -91,9 +91,7 @@ class ScontrinoData(BaseModel):
 
 
 class VocaleData(BaseModel):
-  negozio: str = Field(
-      description="Descrizione della spesa/entrata o nome del negozio"
-  )
+  negozio: str = Field(description="Descrizione della spesa/entrata o nome del negozio")
   totale: float = Field(description="Importo in euro menzionato nell'audio")
   tipo: str = Field(description="Tipo: 'Entrata' o 'Uscita'")
   data: Optional[str] = Field(
@@ -104,16 +102,12 @@ class VocaleData(BaseModel):
 
 class MovimentoBancarioPDF(BaseModel):
   data: str = Field(description="Data della transazione in formato YYYY-MM-DD")
-  descrizione: str = Field(
-      description="Causale o descrizione del movimento bancario"
-  )
+  descrizione: str = Field(description="Causale o descrizione del movimento bancario")
   importo: float = Field(description="Importo assoluto in euro (valore positivo)")
 
 
 class EstrattoContoPDFData(BaseModel):
-  movimenti: List[MovimentoBancarioPDF] = Field(
-      description="Lista delle transazioni trovate nel documento bancario"
-  )
+  movimenti: List[MovimentoBancarioPDF] = Field(description="Lista delle transazioni trovate nel documento bancario")
 
 
 # --- FUNZIONI SUPABASE ---
@@ -131,9 +125,7 @@ def carica_storico() -> list:
     return []
 
 
-def salva_movimento(
-    negozio: str, data: str, totale: float, tipo: str = "Uscita"
-):
+def salva_movimento(negozio: str, data: str, totale: float, tipo: str = "Uscita"):
   try:
     data_payload = {
         "negozio": negozio,
@@ -146,9 +138,7 @@ def salva_movimento(
     st.error(f"Errore durante il salvataggio su Supabase: {e}")
 
 
-def aggiorna_movimento(
-    item_id: int, negozio: str, data: str, totale: float, tipo: str
-):
+def aggiorna_movimento(item_id: int, negozio: str, data: str, totale: float, tipo: str):
   try:
     data_payload = {
         "negozio": negozio,
@@ -193,9 +183,7 @@ def genera_pdf_storico(storico: list) -> bytes:
   story.append(Spacer(1, 15))
 
   tot_entrate = sum(
-      float(item["totale"])
-      for item in storico
-      if item.get("tipo") == "Entrata"
+      float(item["totale"]) for item in storico if item.get("tipo") == "Entrata"
   )
   tot_uscite = sum(
       float(item["totale"]) for item in storico if item.get("tipo") == "Uscita"
@@ -279,9 +267,7 @@ with tab1:
 
     if st.button("Analizza e Salva come Uscita", type="primary"):
       with st.spinner("Analisi veloce in corso..."):
-        api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
-            "GEMINI_API_KEY"
-        )
+        api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
         client = genai.Client(api_key=api_key)
 
         config = types.GenerateContentConfig(
@@ -290,8 +276,8 @@ with tab1:
             temperature=0.1,
         )
         prompt = (
-            "Analizza lo scontrino. Estrai nome negozio, data (YYYY-MM-DD) e"
-            " totale finale in euro. Se la data non è visibile, usa null."
+            "Analizza lo scontrino. Estrai nome negozio, data (YYYY-MM-DD) e totale finale in euro. "
+            "Se la data non è visibile, usa null."
         )
 
         try:
@@ -306,12 +292,8 @@ with tab1:
           st.error(f"Errore durante l'analisi: {e}")
 
         if dati is not None:
-          data_finale = (
-              dati.data if dati.data else datetime.now().strftime("%Y-%m-%d")
-          )
-          salva_movimento(
-              dati.nome_negozio, data_finale, dati.totale_euro, tipo="Uscita"
-          )
+          data_finale = dati.data if dati.data else datetime.now().strftime("%Y-%m-%d")
+          salva_movimento(dati.nome_negozio, data_finale, dati.totale_euro, tipo="Uscita")
 
           st.success("Scontrino salvato in Supabase!")
           st.metric("Spesa Registrata", f"€ {dati.totale_euro:.2f}")
@@ -320,10 +302,7 @@ with tab1:
 # TAB 2: INSERIMENTO VOCALE OTTIMIZZATO
 with tab2:
   st.subheader("Registra una nota vocale")
-  st.write(
-      "Esempio: *'Speso 15.50 euro al bar per colazione'* o *'Incassato 200 euro"
-      " consulenza'*)"
-  )
+  st.write("Esempio: *'Speso 15.50 euro al bar per colazione'* o *'Incassato 200 euro consulenza'*)")
 
   if "audio_key" not in st.session_state:
     st.session_state["audio_key"] = 0
@@ -339,16 +318,12 @@ with tab2:
   if audio_registrato is not None:
     if st.button("🎙️ Analizza Audio", type="primary"):
       with st.spinner("Analisi audio rapida..."):
-        api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
-            "GEMINI_API_KEY"
-        )
+        api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
         client = genai.Client(api_key=api_key)
 
         audio_bytes = audio_registrato.read()
         mime_type = audio_registrato.type or "audio/wav"
-        part_audio = types.Part.from_bytes(
-            data=audio_bytes, mime_type=mime_type
-        )
+        part_audio = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
 
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -357,9 +332,8 @@ with tab2:
         )
 
         prompt_vocale = (
-            "Estrai dall'audio: descrizione spesa/entrata, importo in euro,"
-            " tipo ('Entrata' o 'Uscita') e data YYYY-MM-DD (se menzionata,"
-            " altrimenti null)."
+            "Estrai dall'audio: descrizione spesa/entrata, importo in euro, tipo ('Entrata' o 'Uscita') "
+            "e data YYYY-MM-DD (se menzionata, altrimenti null)."
         )
 
         try:
@@ -426,9 +400,7 @@ with tab3:
         "Importo Totale (€)", min_value=0.01, step=0.10, format="%.2f"
     )
 
-    submit_manuale = st.form_submit_button(
-        "➕ Salva Movimento", type="primary"
-    )
+    submit_manuale = st.form_submit_button("➕ Salva Movimento", type="primary")
 
     if submit_manuale:
       if m_negozio.strip() == "":
@@ -447,14 +419,10 @@ with tab4:
     st.subheader("📊 Bilancio in Tempo Reale")
 
     tot_entrate = sum(
-        float(item["totale"])
-        for item in storico_attuale
-        if item.get("tipo") == "Entrata"
+        float(item["totale"]) for item in storico_attuale if item.get("tipo") == "Entrata"
     )
     tot_uscite = sum(
-        float(item["totale"])
-        for item in storico_attuale
-        if item.get("tipo") == "Uscita"
+        float(item["totale"]) for item in storico_attuale if item.get("tipo") == "Uscita"
     )
     saldo = tot_entrate - tot_uscite
 
@@ -480,22 +448,13 @@ with tab4:
       )
 
     h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([1.2, 2.5, 1, 1.2, 0.6])
-    with h_col1:
-      st.markdown("**Data**")
-    with h_col2:
-      st.markdown("**Descrizione / Negozio**")
-    with h_col3:
-      st.markdown("**Tipo**")
-    with h_col4:
-      st.markdown("**Importo**")
-    with h_col5:
-      st.markdown("**Azione**")
+    with h_col1: st.markdown("**Data**")
+    with h_col2: st.markdown("**Descrizione / Negozio**")
+    with h_col3: st.markdown("**Tipo**")
+    with h_col4: st.markdown("**Importo**")
+    with h_col5: st.markdown("**Azione**")
 
-    st.markdown(
-        "<hr style='margin-top:2px; margin-bottom:8px; border:1px solid"
-        " #31333F;'>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<hr style='margin-top:2px; margin-bottom:8px; border:1px solid #31333F;'>", unsafe_allow_html=True)
 
     for item in storico_attuale:
       item_id = item["id"]
@@ -503,23 +462,15 @@ with tab4:
       colore_ico = "🟢" if tipo == "Entrata" else "🔴"
       segno = "+" if tipo == "Entrata" else "-"
 
-      r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns(
-          [1.2, 2.5, 1, 1.2, 0.6]
-      )
+      r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([1.2, 2.5, 1, 1.2, 0.6])
 
-      with r_col1:
-        st.write(f"`{item['data']}`")
-      with r_col2:
-        st.write(item["negozio"])
-      with r_col3:
-        st.write(f"{colore_ico} {tipo}")
-      with r_col4:
-        st.write(f"**{segno} € {float(item['totale']):.2f}**")
+      with r_col1: st.write(f"`{item['data']}`")
+      with r_col2: st.write(item["negozio"])
+      with r_col3: st.write(f"{colore_ico} {tipo}")
+      with r_col4: st.write(f"**{segno} € {float(item['totale']):.2f}**")
       with r_col5:
         if st.button("✏️", key=f"edit_btn_{item_id}", help="Modifica / Elimina"):
-          st.session_state[f"editing_{item_id}"] = not st.session_state.get(
-              f"editing_{item_id}", False
-          )
+          st.session_state[f"editing_{item_id}"] = not st.session_state.get(f"editing_{item_id}", False)
 
       if st.session_state.get(f"editing_{item_id}", False):
         with st.container():
@@ -527,45 +478,25 @@ with tab4:
             st.caption(f"✏️ Modifica Movimento ID: #{item_id}")
             f_col1, f_col2 = st.columns(2)
             with f_col1:
-              nuovo_tipo = st.selectbox(
-                  "Tipo",
-                  ["Uscita", "Entrata"],
-                  index=0 if tipo == "Uscita" else 1,
-              )
-              nuovo_negozio = st.text_input(
-                  "Descrizione/Negozio", value=item["negozio"]
-              )
+              nuovo_tipo = st.selectbox("Tipo", ["Uscita", "Entrata"], index=0 if tipo == "Uscita" else 1)
+              nuovo_negozio = st.text_input("Descrizione/Negozio", value=item["negozio"])
             with f_col2:
-              nuova_data = st.text_input(
-                  "Data (YYYY-MM-DD)", value=str(item["data"])
-              )
-              nuovo_totale = st.number_input(
-                  "Totale (€)", value=float(item["totale"]), step=0.1
-              )
+              nuova_data = st.text_input("Data (YYYY-MM-DD)", value=str(item["data"]))
+              nuovo_totale = st.number_input("Totale (€)", value=float(item["totale"]), step=0.1)
 
             btn_salva, btn_elimina = st.columns([1, 1])
             with btn_salva:
-              if st.form_submit_button(
-                  "💾 Salva Modifiche", use_container_width=True
-              ):
-                aggiorna_movimento(
-                    item_id, nuovo_negozio, nuova_data, nuovo_totale, nuovo_tipo
-                )
+              if st.form_submit_button("💾 Salva Modifiche", use_container_width=True):
+                aggiorna_movimento(item_id, nuovo_negozio, nuova_data, nuovo_totale, nuovo_tipo)
                 st.session_state[f"editing_{item_id}"] = False
                 st.rerun()
             with btn_elimina:
-              if st.form_submit_button(
-                  "🗑️ Elimina Movimento", type="secondary", use_container_width=True
-              ):
+              if st.form_submit_button("🗑️ Elimina Movimento", type="secondary", use_container_width=True):
                 elimina_movimento(item_id)
                 st.session_state[f"editing_{item_id}"] = False
                 st.rerun()
 
-      st.markdown(
-          "<hr style='margin-top:2px; margin-bottom:2px; border:0.2px solid"
-          " #444;'>",
-          unsafe_allow_html=True,
-      )
+      st.markdown("<hr style='margin-top:2px; margin-bottom:2px; border:0.2px solid #444;'>", unsafe_allow_html=True)
 
   else:
     st.info("Nessun movimento registrato in Supabase.")
@@ -573,36 +504,24 @@ with tab4:
 # TAB 5: RICONCILIAZIONE BANCARIA (CSV, EXCEL & PDF)
 with tab5:
   st.subheader("🔍 Riconciliazione tra Estratto Conto Bancario e App")
-  st.write(
-      "Carica il file dell'estratto conto scaricato dalla tua banca (in"
-      " formato **CSV**, **Excel `.xlsx`** o **PDF**)."
-  )
+  st.write("Carica il file dell'estratto conto scaricato dalla tua banca (in formato **CSV**, **Excel `.xlsx`** o **PDF**).")
 
-  file_banca = st.file_uploader(
-      "Carica File Estratto Conto", type=["csv", "xlsx", "pdf"]
-  )
-  tolleranza_giorni = st.slider(
-      "Tolleranza Giorni Data (per la contabilizzazione bancaria)", 0, 7, 3
-  )
+  file_banca = st.file_uploader("Carica File Estratto Conto", type=["csv", "xlsx", "pdf"])
+  tolleranza_giorni = st.slider("Tolleranza Giorni Data (per la contabilizzazione bancaria)", 0, 7, 3)
 
   if file_banca is not None:
     movimenti_banca_list = []
-    df_banca = None
 
     try:
       # CASO 1: FILE PDF
       if file_banca.name.endswith(".pdf"):
         if st.button("🤖 Estrai Movimenti da PDF con Gemini", type="primary"):
           with st.spinner("Estrazione ed elaborazione del PDF in corso..."):
-            api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
-                "GEMINI_API_KEY"
-            )
+            api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
             client = genai.Client(api_key=api_key)
 
             pdf_bytes = file_banca.read()
-            part_pdf = types.Part.from_bytes(
-                data=pdf_bytes, mime_type="application/pdf"
-            )
+            part_pdf = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
 
             config = types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -611,10 +530,8 @@ with tab5:
             )
 
             prompt_pdf = (
-                "Analizza questo estratto conto bancario PDF. Estrai tutti i"
-                " movimenti presenti indicando per ciascuno: la data"
-                " (YYYY-MM-DD), la descrizione/causale e l'importo assoluto in"
-                " euro."
+                "Analizza questo estratto conto bancario PDF. Estrai tutti i movimenti presenti "
+                "indicando per ciascuno: la data (YYYY-MM-DD), la descrizione/causale e l'importo assoluto in euro."
             )
 
             response = client.models.generate_content(
@@ -633,65 +550,34 @@ with tab5:
                   }
                   for m in dati_pdf.movimenti
               ]
-              st.success(
-                  f"Estratti {len(dati_pdf.movimenti)} movimenti dal PDF!"
-              )
+              st.success(f"Estratti {len(dati_pdf.movimenti)} movimenti dal PDF!")
             else:
               st.error("Nessun movimento trovato nel file PDF.")
 
         if "pdf_movimenti_banca" in st.session_state:
           df_banca = pd.DataFrame(st.session_state["pdf_movimenti_banca"])
           c_data, c_desc, c_importo = "data", "descrizione", "importo"
+        else:
+          df_banca = None
 
-      # CASO 2: FILE CSV O EXCEL CON GESTIONE COLONNE DUPLICATE
+      # CASO 2: FILE CSV O EXCEL
       else:
         if file_banca.name.endswith(".csv"):
-          try:
-            df_banca = pd.read_csv(
-                file_banca,
-                sep=None,
-                engine="python",
-                on_bad_lines="skip",
-                encoding="utf-8",
-            )
-          except Exception:
-            file_banca.seek(0)
-            df_banca = pd.read_csv(
-                file_banca,
-                sep=None,
-                engine="python",
-                on_bad_lines="skip",
-                encoding="latin1",
-            )
+          df_banca = pd.read_csv(file_banca)
         else:
           df_banca = pd.read_excel(file_banca)
 
-        # Gestione automatica dei nomi di colonna duplicati per evitare conflitti
-        cols = pd.Series(df_banca.columns)
-        for dup in cols[cols.duplicated()].unique():
-          cols[cols == dup] = [
-              f"{dup}_{i}" if i != 0 else dup for i in range(sum(cols == dup))
-          ]
-        df_banca.columns = cols
-
-        st.write(
-            "📌 **Seleziona le colonne corrispondenti del tuo file bancario:**"
-        )
+        st.write("📌 **Seleziona le colonne corrispondenti del tuo file bancario:**")
         col_names = list(df_banca.columns)
 
         col_sel1, col_sel2, col_sel3 = st.columns(3)
-        with col_sel1:
-          c_data = st.selectbox("Colonna Data", col_names)
-        with col_sel2:
-          c_desc = st.selectbox("Colonna Descrizione/Causale", col_names)
-        with col_sel3:
-          c_importo = st.selectbox("Colonna Importo", col_names)
+        with col_sel1: c_data = st.selectbox("Colonna Data", col_names)
+        with col_sel2: c_desc = st.selectbox("Colonna Descrizione/Causale", col_names)
+        with col_sel3: c_importo = st.selectbox("Colonna Importo", col_names)
 
       # ESECUZIONE CONFRONTO
       if df_banca is not None:
-        if file_banca.name.endswith(".pdf") or st.button(
-            "⚡ Avvia Confronto Movimenti", type="primary"
-        ):
+        if file_banca.name.endswith(".pdf") or st.button("⚡ Avvia Confronto Movimenti", type="primary"):
           movimenti_db = carica_storico()
 
           if not movimenti_db:
@@ -701,22 +587,8 @@ with tab5:
             df_db["data_dt"] = pd.to_datetime(df_db["data"], errors="coerce")
             df_db["totale_abs"] = df_db["totale"].astype(float).abs()
 
-            df_banca["data_dt"] = pd.to_datetime(
-                df_banca[c_data], errors="coerce"
-            )
-
-            # Pulisce l'importo da simboli, punti e virgole
-            importo_clean = (
-                df_banca[c_importo]
-                .astype(str)
-                .str.replace("€", "")
-                .str.replace(" ", "")
-                .str.replace(".", "")
-                .str.replace(",", ".")
-            )
-            df_banca["totale_abs"] = (
-                pd.to_numeric(importo_clean, errors="coerce").abs()
-            )
+            df_banca["data_dt"] = pd.to_datetime(df_banca[c_data], errors="coerce")
+            df_banca["totale_abs"] = pd.to_numeric(df_banca[c_importo], errors="coerce").abs()
 
             riconciliati = []
             matched_db_ids = set()
@@ -735,10 +607,7 @@ with tab5:
                 db_totale = abs(float(db_item["totale"]))
 
                 diff_giorni = abs((b_row["data_dt"] - db_dt).days)
-                if (
-                    abs(b_row["totale_abs"] - db_totale) < 0.01
-                    and diff_giorni <= tolleranza_giorni
-                ):
+                if abs(b_row["totale_abs"] - db_totale) < 0.01 and diff_giorni <= tolleranza_giorni:
                   matched_db_ids.add(db_id)
                   matched_banca_idx.add(b_idx)
                   riconciliati.append({
@@ -750,11 +619,11 @@ with tab5:
                   })
                   break
 
-            soli_app_filtrati = [
-                x for x in movimenti_db if x["id"] not in matched_db_ids
-            ]
-            soli_banca_filtrati = df_banca.iloc[
-                [i for i in range(len(df_banca)) if i not in matched_banca_idx]
+            soli_app_filtrati = [x for x in movimenti_db if x["id"] not in matched_db_ids]
+            soli_banca_filtrati = [
+                df_banca.iloc[i].to_dict()
+                for i in range(len(df_banca))
+                if i not in matched_banca_idx
             ]
 
             # MOSTRA RISULTATI
@@ -774,37 +643,27 @@ with tab5:
 
             with sub_t1:
               if riconciliati:
-                st.dataframe(
-                    pd.DataFrame(riconciliati), use_container_width=True
-                )
+                st.dataframe(pd.DataFrame(riconciliati), use_container_width=True)
               else:
                 st.info("Nessuna corrispondenza trovata.")
 
             with sub_t2:
               if soli_app_filtrati:
                 st.dataframe(
-                    pd.DataFrame(soli_app_filtrati)[
-                        ["data", "negozio", "tipo", "totale"]
-                    ],
+                    pd.DataFrame(soli_app_filtrati)[["data", "negozio", "tipo", "totale"]],
                     use_container_width=True,
                 )
               else:
-                st.success(
-                    "Tutti i movimenti dell'app sono stati trovati nell'estratto"
-                    " conto!"
-                )
+                st.success("Tutti i movimenti dell'app sono stati trovati nell'estratto conto!")
 
             with sub_t3:
-              if not soli_banca_filtrati.empty:
+              if soli_banca_filtrati:
                 st.dataframe(
-                    soli_banca_filtrati[[c_data, c_desc, c_importo]],
+                    pd.DataFrame(soli_banca_filtrati)[[c_data, c_desc, c_importo]],
                     use_container_width=True,
                 )
               else:
-                st.success(
-                    "Tutti i movimenti dell'estratto conto bancario sono"
-                    " registrati nell'app!"
-                )
+                st.success("Tutti i movimenti dell'estratto conto bancario sono registrati nell'app!")
 
     except Exception as e:
       st.error(f"Errore nella lettura o elaborazione del file bancario: {e}")
