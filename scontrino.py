@@ -643,7 +643,7 @@ with tab5:
           df_banca = pd.DataFrame(st.session_state["pdf_movimenti_banca"])
           c_data, c_desc, c_importo = "data", "descrizione", "importo"
 
-      # CASO 2: FILE CSV O EXCEL
+      # CASO 2: FILE CSV O EXCEL CON GESTIONE COLONNE DUPLICATE
       else:
         if file_banca.name.endswith(".csv"):
           try:
@@ -665,6 +665,14 @@ with tab5:
             )
         else:
           df_banca = pd.read_excel(file_banca)
+
+        # Gestione automatica dei nomi di colonna duplicati per evitare conflitti
+        cols = pd.Series(df_banca.columns)
+        for dup in cols[cols.duplicated()].unique():
+          cols[cols == dup] = [
+              f"{dup}_{i}" if i != 0 else dup for i in range(sum(cols == dup))
+          ]
+        df_banca.columns = cols
 
         st.write(
             "📌 **Seleziona le colonne corrispondenti del tuo file bancario:**"
@@ -696,9 +704,19 @@ with tab5:
             df_banca["data_dt"] = pd.to_datetime(
                 df_banca[c_data], errors="coerce"
             )
-            df_banca["totale_abs"] = pd.to_numeric(
-                df_banca[c_importo], errors="coerce"
-            ).abs()
+
+            # Pulisce l'importo da simboli, punti e virgole
+            importo_clean = (
+                df_banca[c_importo]
+                .astype(str)
+                .str.replace("€", "")
+                .str.replace(" ", "")
+                .str.replace(".", "")
+                .str.replace(",", ".")
+            )
+            df_banca["totale_abs"] = (
+                pd.to_numeric(importo_clean, errors="coerce").abs()
+            )
 
             riconciliati = []
             matched_db_ids = set()
@@ -735,10 +753,8 @@ with tab5:
             soli_app_filtrati = [
                 x for x in movimenti_db if x["id"] not in matched_db_ids
             ]
-            soli_banca_filtrati = [
-                df_banca.iloc[i].to_dict()
-                for i in range(len(df_banca))
-                if i not in matched_banca_idx
+            soli_banca_filtrati = df_banca.iloc[
+                [i for i in range(len(df_banca)) if i not in matched_banca_idx]
             ]
 
             # MOSTRA RISULTATI
@@ -779,11 +795,9 @@ with tab5:
                 )
 
             with sub_t3:
-              if soli_banca_filtrati:
+              if not soli_banca_filtrati.empty:
                 st.dataframe(
-                    pd.DataFrame(soli_banca_filtrati)[
-                        [c_data, c_desc, c_importo]
-                    ],
+                    soli_banca_filtrati[[c_data, c_desc, c_importo]],
                     use_container_width=True,
                 )
               else:
