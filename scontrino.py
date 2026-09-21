@@ -396,7 +396,6 @@ with tab2:
             continue
 
         if dati_vocali is not None:
-          # Salva i dati temporanei in session state per farli confermare all'utente
           st.session_state["dati_vocali_temp"] = {
               "negozio": dati_vocali.negozio,
               "totale": dati_vocali.totale,
@@ -410,7 +409,6 @@ with tab2:
         else:
           st.error(f"Errore durante l'analisi dell'audio: {ultimo_errore}")
 
-  # Se esistono dati temporanei analizzati dall'audio, mostra l'anteprima e il pulsante di salvataggio
   if st.session_state["dati_vocali_temp"] is not None:
     dati = st.session_state["dati_vocali_temp"]
     st.info("🔍 **Anteprima Dati Riconosciuti:**")
@@ -433,7 +431,6 @@ with tab2:
 
       st.success("Movimento salvato con successo su Supabase!")
 
-      # Azzera i dati temporanei e il registratore audio
       st.session_state["dati_vocali_temp"] = None
       st.session_state["audio_key"] += 1
 
@@ -473,7 +470,7 @@ with tab3:
             f" {m_totale:.2f} ({data_str})"
         )
 
-# TAB 4: BILANCIO IN TEMPO REALE, MODIFICA & PDF
+# TAB 4: BILANCIO IN TABELLA RACCOLTA & EXPORT PDF
 with tab4:
   storico_attuale = carica_storico()
 
@@ -498,68 +495,113 @@ with tab4:
     col_m3.metric("⚖️ Saldo Netto", f"€ {saldo:.2f}")
 
     st.divider()
-    st.subheader("Elenco Movimenti (da Supabase)")
 
+    col_titolo, col_pdf = st.columns([2, 1])
+    with col_titolo:
+      st.subheader("📋 Registro Movimenti")
+    with col_pdf:
+      pdf_bytes = genera_pdf_storico(storico_attuale)
+      st.download_button(
+          label="📄 Scarica PDF",
+          data=pdf_bytes,
+          file_name=f"report_bilancio_{datetime.now().strftime('%Y%m%d')}.pdf",
+          mime="application/pdf",
+          type="primary",
+          use_container_width=True,
+      )
+
+    # Intestazione della Tabella
+    h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([1.2, 2.5, 1, 1.2, 0.6])
+    with h_col1:
+      st.markdown("**Data**")
+    with h_col2:
+      st.markdown("**Descrizione / Negozio**")
+    with h_col3:
+      st.markdown("**Tipo**")
+    with h_col4:
+      st.markdown("**Importo**")
+    with h_col5:
+      st.markdown("**Azione**")
+
+    st.markdown(
+        "<hr style='margin-top:2px; margin-bottom:8px; border:1px solid"
+        " #31333F;'>",
+        unsafe_allow_html=True,
+    )
+
+    # Righe della Tabella
     for item in storico_attuale:
       item_id = item["id"]
       tipo = item.get("tipo", "Uscita")
       colore_ico = "🟢" if tipo == "Entrata" else "🔴"
       segno = "+" if tipo == "Entrata" else "-"
 
-      col_info, col_modifica, col_elimina = st.columns([3, 1, 1])
+      r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns(
+          [1.2, 2.5, 1, 1.2, 0.6]
+      )
 
-      with col_info:
-        st.write(
-            f"📅 **{item['data']}** | {colore_ico} **{tipo}** | "
-            f"🏪 **{item['negozio']}** | **{segno} € {float(item['totale']):.2f}**"
-        )
-
-      with col_modifica:
-        if st.button("✏️ Modifica", key=f"edit_{item_id}"):
+      with r_col1:
+        st.write(f"`{item['data']}`")
+      with r_col2:
+        st.write(item["negozio"])
+      with r_col3:
+        st.write(f"{colore_ico} {tipo}")
+      with r_col4:
+        st.write(f"**{segno} € {float(item['totale']):.2f}**")
+      with r_col5:
+        if st.button("✏️", key=f"edit_btn_{item_id}", help="Modifica / Elimina"):
           st.session_state[f"editing_{item_id}"] = not st.session_state.get(
               f"editing_{item_id}", False
           )
 
-      with col_elimina:
-        if st.button("🗑️ Elimina", key=f"del_{item_id}", type="secondary"):
-          elimina_movimento(item_id)
-          st.success("Movimento eliminato con successo!")
-          st.rerun()
-
+      # Form di modifica a comparsa direttamente sotto la riga selezionata
       if st.session_state.get(f"editing_{item_id}", False):
-        with st.form(key=f"form_edit_{item_id}"):
-          nuovo_tipo = st.selectbox(
-              "Tipo",
-              ["Uscita", "Entrata"],
-              index=0 if tipo == "Uscita" else 1,
-          )
-          nuovo_negozio = st.text_input(
-              "Descrizione/Negozio", value=item["negozio"]
-          )
-          nuova_data = st.text_input(
-              "Data (YYYY-MM-DD)", value=str(item["data"])
-          )
-          nuovo_totale = st.number_input(
-              "Totale (€)", value=float(item["totale"]), step=0.1
-          )
+        with st.container():
+          with st.form(key=f"form_edit_{item_id}"):
+            st.caption(f"✏️ Modifica Movimento ID: #{item_id}")
+            f_col1, f_col2 = st.columns(2)
+            with f_col1:
+              nuovo_tipo = st.selectbox(
+                  "Tipo",
+                  ["Uscita", "Entrata"],
+                  index=0 if tipo == "Uscita" else 1,
+              )
+              nuovo_negozio = st.text_input(
+                  "Descrizione/Negozio", value=item["negozio"]
+              )
+            with f_col2:
+              nuova_data = st.text_input(
+                  "Data (YYYY-MM-DD)", value=str(item["data"])
+              )
+              nuovo_totale = st.number_input(
+                  "Totale (€)", value=float(item["totale"]), step=0.1
+              )
 
-          if st.form_submit_button("💾 Salva Modifiche"):
-            aggiorna_movimento(
-                item_id, nuovo_negozio, nuova_data, nuovo_totale, nuovo_tipo
-            )
-            st.session_state[f"editing_{item_id}"] = False
-            st.success("Modifiche salvate con successo!")
-            st.rerun()
+            btn_salva, btn_elimina = st.columns([1, 1])
+            with btn_salva:
+              if st.form_submit_button(
+                  "💾 Salva Modifiche", use_container_width=True
+              ):
+                aggiorna_movimento(
+                    item_id, nuovo_negozio, nuova_data, nuovo_totale, nuovo_tipo
+                )
+                st.session_state[f"editing_{item_id}"] = False
+                st.success("Modificato!")
+                st.rerun()
+            with btn_elimina:
+              if st.form_submit_button(
+                  "🗑️ Elimina Movimento", type="secondary", use_container_width=True
+              ):
+                elimina_movimento(item_id)
+                st.session_state[f"editing_{item_id}"] = False
+                st.success("Eliminato!")
+                st.rerun()
 
-      st.divider()
+      st.markdown(
+          "<hr style='margin-top:2px; margin-bottom:2px; border:0.2px solid"
+          " #444;'>",
+          unsafe_allow_html=True,
+      )
 
-    pdf_bytes = genera_pdf_storico(storico_attuale)
-    st.download_button(
-        label="📄 Scarica Report PDF Bilancio",
-        data=pdf_bytes,
-        file_name=f"report_bilancio_{datetime.now().strftime('%Y%m%d')}.pdf",
-        mime="application/pdf",
-        type="primary",
-    )
   else:
     st.info("Nessun movimento registrato in Supabase.")
