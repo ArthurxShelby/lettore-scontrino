@@ -264,7 +264,7 @@ def genera_pdf_riconciliazione(
   )
   story.append(Spacer(1, 15))
 
-  # Summary Table
+  # Table Riepilogativa
   summary_data = [
       ["Categoria", "Numero Movimenti"],
       ["🟢 Riconciliati (In entrambi)", str(len(riconciliati))],
@@ -600,7 +600,7 @@ with tab3:
       else:
         tipo_str = "Entrata" if "Entrata" in m_tipo else "Uscita"
         data_str = m_data.strftime("%Y-%m-%d")
-        salva_movimento(m_negozio, data_str, float(m_totale), type=tipo_str)
+        salva_movimento(m_negozio, data_str, float(m_totale), tipo=tipo_str)
         st.success(f"Registrata {tipo_str}: **{m_negozio}** - € {m_totale:.2f}")
 
 # TAB 4: BILANCIO E TABELLA
