@@ -331,7 +331,7 @@ with tab1:
               f"Si è verificato un errore durante l'analisi: {ultimo_errore}"
           )
 
-# TAB 2: INSERIMENTO VOCALE CON AZZERAMENTO AUTOMATICO
+# TAB 2: INSERIMENTO VOCALE CON BOTTONE DI SALVATAGGIO
 with tab2:
   st.subheader("Registra una nota vocale per la tua spesa o entrata")
   st.write(
@@ -339,9 +339,11 @@ with tab2:
       " incassato 200 euro per una consulenza'*"
   )
 
-  # Inizializza la chiave dinamica per azzerare l'input audio
   if "audio_key" not in st.session_state:
     st.session_state["audio_key"] = 0
+
+  if "dati_vocali_temp" not in st.session_state:
+    st.session_state["dati_vocali_temp"] = None
 
   audio_registrato = st.audio_input(
       "Premi il microfono per registrare",
@@ -349,7 +351,7 @@ with tab2:
   )
 
   if audio_registrato is not None:
-    if st.button("🎙️ Analizza ed Estrai Dati", type="primary"):
+    if st.button("🎙️ Analizza Audio", type="primary"):
       with st.spinner("Ascolto e analisi in corso con Gemini..."):
         api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
             "GEMINI_API_KEY"
@@ -394,33 +396,49 @@ with tab2:
             continue
 
         if dati_vocali is not None:
-          data_finale = (
-              dati_vocali.data
-              if dati_vocali.data
-              else datetime.now().strftime("%Y-%m-%d")
-          )
-
-          salva_movimento(
-              dati_vocali.negozio,
-              data_finale,
-              dati_vocali.totale,
-              tipo=dati_vocali.tipo,
-          )
-
-          # Incrementa la chiave per azzerare il registratore
-          st.session_state["audio_key"] += 1
-
-          st.success("Nota vocale elaborata e salvata con successo!")
-          st.metric("Importo", f"€ {dati_vocali.totale:.2f}")
-          st.write(f"**Descrizione:** {dati_vocali.negozio}")
-          st.write(f"**Tipo:** {dati_vocali.tipo}")
-          st.write(f"**Data:** {data_finale}")
-
-          # Ricarica la pagina per resettare pulitamente l'interfaccia
-          time.sleep(1)
-          st.rerun()
+          # Salva i dati temporanei in session state per farli confermare all'utente
+          st.session_state["dati_vocali_temp"] = {
+              "negozio": dati_vocali.negozio,
+              "totale": dati_vocali.totale,
+              "tipo": dati_vocali.tipo,
+              "data": (
+                  dati_vocali.data
+                  if dati_vocali.data
+                  else datetime.now().strftime("%Y-%m-%d")
+              ),
+          }
         else:
           st.error(f"Errore durante l'analisi dell'audio: {ultimo_errore}")
+
+  # Se esistono dati temporanei analizzati dall'audio, mostra l'anteprima e il pulsante di salvataggio
+  if st.session_state["dati_vocali_temp"] is not None:
+    dati = st.session_state["dati_vocali_temp"]
+    st.info("🔍 **Anteprima Dati Riconosciuti:**")
+
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+      st.write(f"**Descrizione:** {dati['negozio']}")
+      st.write(f"**Tipo:** {dati['tipo']}")
+    with col_v2:
+      st.write(f"**Importo:** € {dati['totale']:.2f}")
+      st.write(f"**Data:** {dati['data']}")
+
+    if st.button("💾 Conferma e Salva Movimento", type="primary"):
+      salva_movimento(
+          negozio=dati["negozio"],
+          data=dati["data"],
+          totale=dati["totale"],
+          tipo=dati["tipo"],
+      )
+
+      st.success("Movimento salvato con successo su Supabase!")
+
+      # Azzera i dati temporanei e il registratore audio
+      st.session_state["dati_vocali_temp"] = None
+      st.session_state["audio_key"] += 1
+
+      time.sleep(1)
+      st.rerun()
 
 # TAB 3: INSERIMENTO MANUALE
 with tab3:
