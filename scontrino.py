@@ -331,12 +331,22 @@ with tab1:
               f"Si è verificato un errore durante l'analisi: {ultimo_errore}"
           )
 
-# TAB 2: INSERIMENTO VOCALE
+# TAB 2: INSERIMENTO VOCALE CON AZZERAMENTO AUTOMATICO
 with tab2:
   st.subheader("Registra una nota vocale per la tua spesa o entrata")
-  st.write("Esempio: *'Ho speso 15 euro e 50 al bar per la colazione'* oppure *'Ho incassato 200 euro per una consulenza'*")
+  st.write(
+      "Esempio: *'Ho speso 15 euro e 50 al bar per la colazione'* oppure *'Ho"
+      " incassato 200 euro per una consulenza'*"
+  )
 
-  audio_registrato = st.audio_input("Premi il microfono per registrare")
+  # Inizializza la chiave dinamica per azzerare l'input audio
+  if "audio_key" not in st.session_state:
+    st.session_state["audio_key"] = 0
+
+  audio_registrato = st.audio_input(
+      "Premi il microfono per registrare",
+      key=f"audio_input_{st.session_state['audio_key']}",
+  )
 
   if audio_registrato is not None:
     if st.button("🎙️ Analizza ed Estrai Dati", type="primary"):
@@ -349,7 +359,9 @@ with tab2:
         audio_bytes = audio_registrato.read()
         mime_type = audio_registrato.type or "audio/wav"
 
-        part_audio = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+        part_audio = types.Part.from_bytes(
+            data=audio_bytes, mime_type=mime_type
+        )
 
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -395,11 +407,18 @@ with tab2:
               tipo=dati_vocali.tipo,
           )
 
+          # Incrementa la chiave per azzerare il registratore
+          st.session_state["audio_key"] += 1
+
           st.success("Nota vocale elaborata e salvata con successo!")
           st.metric("Importo", f"€ {dati_vocali.totale:.2f}")
           st.write(f"**Descrizione:** {dati_vocali.negozio}")
           st.write(f"**Tipo:** {dati_vocali.tipo}")
           st.write(f"**Data:** {data_finale}")
+
+          # Ricarica la pagina per resettare pulitamente l'interfaccia
+          time.sleep(1)
+          st.rerun()
         else:
           st.error(f"Errore durante l'analisi dell'audio: {ultimo_errore}")
 
