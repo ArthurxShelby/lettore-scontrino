@@ -15,7 +15,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 import streamlit as st
-import streamlit.components.v1 as components
 from supabase import Client, create_client
 
 # Configurazione della pagina Streamlit
@@ -399,13 +398,13 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🔍 Riconciliazione Bancaria",
 ])
 
-# TAB 1: ACQUISIZIONE FOTO OTTIMIZZATA (WEBCAM NATIVA HTML5 + UPLOAD)
+# TAB 1: ACQUISIZIONE FOTO OTTIMIZZATA
 with tab1:
   st.subheader("📷 Acquisizione Scontrino")
 
   modalita_input = st.radio(
       "Scegli modalità di acquisizione:",
-      ["📁 Carica File Immagine", "📷 Scatta da Fotocamera Web"],
+      ["📁 Carica File Immagine", "📷 Fotocamera Integrata"],
       horizontal=True,
   )
 
@@ -418,46 +417,20 @@ with tab1:
     if file_upload is not None:
       foto_scontrino_bytes = file_upload.read()
   else:
-    st.write(
-        "Inquadra lo scontrino e clicca su **'Scatta Foto'** per catturare"
-        " l'immagine:"
+    if "cam_key" not in st.session_state:
+      st.session_state["cam_key"] = 0
+
+    col_c1, col_c2 = st.columns([1, 1])
+    with col_c1:
+      if st.button("🔄 Riavvia / Sblocca Fotocamera", use_container_width=True):
+        st.session_state["cam_key"] += 1
+        st.rerun()
+
+    camera_photo = st.camera_input(
+        "Scatta foto allo scontrino", key=f"cam_input_{st.session_state['cam_key']}"
     )
-
-    # Componente Webcam HTML5 nativo che bypassa i blocchi iframe
-    camera_html = """
-        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
-            <video id="webcam" autoplay playsinline style="width: 100%; max-width: 500px; border-radius: 10px; border: 2px solid #555;"></video>
-            <button id="snap-btn" style="padding: 10px 20px; font-size: 16px; background-color: #FF4B4B; color: white; border: none; border-radius: 5px; cursor: pointer;">📸 Scatta Foto</button>
-            <canvas id="canvas" style="display:none;"></canvas>
-        </div>
-
-        <script>
-            const video = document.getElementById('webcam');
-            const canvas = document.getElementById('canvas');
-            const snapBtn = document.getElementById('snap-btn');
-
-            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-                .then(stream => { video.srcObject = stream; })
-                .catch(err => { console.error("Errore webcam:", err); });
-
-            snapBtn.addEventListener('click', () => {
-                canvas.width = video.videoWidth || 640;
-                canvas.height = video.videoHeight || 480;
-                const context = canvas.getContext('2d');
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const imageData = canvas.toDataURL('image/jpeg');
-                
-                window.parent.postMessage({ type: 'streamlit:setComponentValue', value: imageData }, '*');
-            });
-        </script>
-        """
-
-    img_data_base64 = components.html(camera_html, height=420)
-
-    if img_data_base64:
-      if isinstance(img_data_base64, str) and "data:image" in img_data_base64:
-        header, encoded = img_data_base64.split(",", 1)
-        foto_scontrino_bytes = base64.b64decode(encoded)
+    if camera_photo is not None:
+      foto_scontrino_bytes = camera_photo.read()
 
   # ANALISI ED ELABORAZIONE IMMAGINE SCONTRINO
   if foto_scontrino_bytes is not None:
@@ -819,7 +792,6 @@ with tab5:
       else:
         df_banca = pd.read_excel(file_banca)
 
-      # Gestione colonne duplicate
       cols = pd.Series(df_banca.columns)
       for dup in cols[cols.duplicated()].unique():
         cols[cols == dup] = [
