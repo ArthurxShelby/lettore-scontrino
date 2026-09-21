@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import os
 from typing import Optional
 
 from google import genai
 from google.genai import types
+import pandas as pd
 from PIL import Image
 from pydantic import BaseModel, Field
 from reportlab.lib import colors
@@ -15,7 +16,7 @@ import streamlit as st
 from supabase import Client, create_client
 
 # Configurazione della pagina Streamlit
-st.set_page_config(page_title="Gestione Bilancio & Scontrini", layout="centered")
+st.set_page_config(page_title="Gestione Bilancio & Scontrini", layout="wide")
 
 
 # --- SISTEMA DI AUTENTICAZIONE CON PASSWORD ---
@@ -59,7 +60,7 @@ if not verifica_password():
 
 
 # --- INIZIO APPLICAZIONE (AUTENTICATA) ---
-st.title("🧾 Gestione Entrate, Uscite e PDF (Supabase)")
+st.title("🧾 Gestione Entrate, Uscite e Riconciliazione (Supabase)")
 
 with st.sidebar:
   st.write("👤 Sessione Attiva")
@@ -221,11 +222,12 @@ def genera_pdf_storico(storico: list) -> bytes:
 
 
 # --- INTERFACCIA APP STREAMLIT ---
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📷 Scansiona Scontrino",
     "🎤 Inserimento Vocale",
     "✍️ Inserimento Manuale",
     "📊 Bilancio & Export PDF",
+    "🔍 Riconciliazione Bancaria",
 ])
 
 # TAB 1: ACQUISIZIONE FOTO OTTIMIZZATA
@@ -250,7 +252,6 @@ with tab1:
     foto_scattata = st.camera_input("Scatta una foto allo scontrino")
 
   if foto_scattata is not None:
-    # Ridimensionamento veloce per ridurre il carico di rete
     immagine = Image.open(foto_scattata)
     immagine.thumbnail((1024, 1024))
 
@@ -489,3 +490,126 @@ with tab4:
 
   else:
     st.info("Nessun movimento registrato in Supabase.")
+
+# TAB 5: RICONCILIAZIONE BANCARIA
+with tab5:
+  st.subheader("🔍 Riconciliazione tra Estratto Conto Bancario e App")
+  st.write("Carica il file dell'estratto conto scaricato dalla tua banca (CSV o Excel `.xlsx`) per confrontare i movimenti.")
+
+  file_banca = st.file_uploader("Carica File Estratto Conto (.csv o .xlsx)", type=["csv", "xlsx"])
+
+  if file_banca is not None:
+    try:
+      if file_banca.name.endswith(".csv"):
+        df_banca = pd.read_csv(file_banca)
+      else:
+        df_banca = pd.read_excel(file_banca)
+
+      st.write("📌 **Seleziona le colonne corrispondenti del tuo file bancario:**")
+      col_names = list(df_banca.columns)
+
+      col_sel1, col_sel2, col_sel3 = st.columns(3)
+      with col_sel1:
+        c_data = st.selectbox("Colonna Data", col_names)
+      with col_sel2:
+        c_desc = st.selectbox("Colonna Descrizione/Causale", col_names)
+      with col_sel3:
+        c_importo = st.selectbox("Colonna Importo", col_names)
+
+      tolleranza_giorni = st.slider("Tolleranza Giorni Data (per la contabilizzazione bancaria)", 0, 7, 3)
+
+      if st.button("⚡ Avvia Confronto", type="primary"):
+        movimenti_db = carica_storico()
+
+        if not movimenti_db:
+          st.warning("Nessun movimento registrato nell'app da confrontare.")
+        else:
+          # Converti DB e File in struttura unificata
+          df_db = pd.DataFrame(movimenti_db)
+          df_db["data_dt"] = pd.to_datetime(df_db["data"], errors="coerce")
+          df_db["totale_abs"] = df_db["totale"].astype(float).abs()
+
+          df_banca["data_dt"] = pd.to_datetime(df_banca[c_data], dayfirst=True, errors="coerce")
+          df_banca["totale_abs"] = pd.to_numeric(df_banca[c_importo], errors="coerce").abs()
+
+          riconciliati = []
+          soli_app = list(movimenti_db)
+          soli_banca = df_banca.to_dict(orient="records")
+
+          matched_db_ids = set()
+          matched_banca_idx = set()
+
+          for b_idx, b_row in df_banca.iterrows():
+            if pd.isna(b_row["data_dt"]) or pd.isna(b_row["totale_abs"]):
+              continue
+
+            for db_item in movimenti_db:
+              db_id = db_item["id"]
+              if db_id in matched_db_ids:
+                continue
+
+              db_dt = pd.to_datetime(db_item["data"])
+              db_totale = abs(float(db_item["totale"]))
+
+              # Verifica corrispondenza su importo e intervallo di date
+              diff_giorni = abs((b_row["data_dt"] - db_dt).days)
+              if abs(b_row["totale_abs"] - db_totale) < 0.01 and diff_giorni <= tolleranza_giorni:
+                matched_db_ids.add(db_id)
+                matched_banca_idx.add(b_idx)
+                riconciliati.append({
+                    "data_banca": b_row["data_dt"].strftime("%Y-%m-%d"),
+                    "data_app": str(db_item["data"]),
+                    "desc_banca": b_row[c_desc],
+                    "desc_app": db_item["negozio"],
+                    "importo": f"€ {db_totale:.2f}",
+                })
+                break
+
+          soli_app_filtrati = [x for x in movimenti_db if x["id"] not in matched_db_ids]
+          soli_banca_filtrati = [
+              df_banca.iloc[i].to_dict()
+              for i in range(len(df_banca))
+              if i not in matched_banca_idx
+          ]
+
+          # RISULTATI RICONCILIAZIONE
+          st.divider()
+          st.subheader("📊 Esito del Confronto")
+
+          r1, r2, r3 = st.columns(3)
+          r1.metric("🟢 Riconciliati (In entrambi)", len(riconciliati))
+          r2.metric("🟡 Presenti solo nell'App", len(soli_app_filtrati))
+          r3.metric("🔴 Presenti solo in Banca", len(soli_banca_filtrati))
+
+          sub_t1, sub_t2, sub_t3 = st.tabs([
+              f"🟢 Riconciliati ({len(riconciliati)})",
+              f"🟡 Solo App ({len(soli_app_filtrati)})",
+              f"🔴 Solo Banca ({len(soli_banca_filtrati)})",
+          ])
+
+          with sub_t1:
+            if riconciliati:
+              st.dataframe(pd.DataFrame(riconciliati), use_container_width=True)
+            else:
+              st.info("Nessuna corrispondenza trovata.")
+
+          with sub_t2:
+            if soli_app_filtrati:
+              st.dataframe(
+                  pd.DataFrame(soli_app_filtrati)[["data", "negozio", "tipo", "totale"]],
+                  use_container_width=True,
+              )
+            else:
+              st.success("Tutti i movimenti dell'app sono presenti in banca!")
+
+          with sub_t3:
+            if soli_banca_filtrati:
+              st.dataframe(
+                  pd.DataFrame(soli_banca_filtrati)[[c_data, c_desc, c_importo]],
+                  use_container_width=True,
+              )
+            else:
+              st.success("Tutti i movimenti della banca sono registrati nell'app!")
+
+    except Exception as e:
+      st.error(f"Errore nella lettura del file bancario: {e}")
