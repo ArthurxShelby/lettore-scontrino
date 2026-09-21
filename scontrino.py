@@ -264,7 +264,6 @@ def genera_pdf_riconciliazione(
   )
   story.append(Spacer(1, 15))
 
-  # Table Riepilogativa
   summary_data = [
       ["Categoria", "Numero Movimenti"],
       ["🟢 Riconciliati (In entrambi)", str(len(riconciliati))],
@@ -284,7 +283,6 @@ def genera_pdf_riconciliazione(
   story.append(summary_table)
   story.append(Spacer(1, 20))
 
-  # 1. Riconciliati
   story.append(
       Paragraph(
           f"<b>🟢 Movimenti Riconciliati ({len(riconciliati)})</b>",
@@ -318,7 +316,6 @@ def genera_pdf_riconciliazione(
     )
   story.append(Spacer(1, 15))
 
-  # 2. Solo App
   story.append(
       Paragraph(
           f"<b>🟡 Presenti solo nell'App ({len(soli_app)})</b>",
@@ -353,7 +350,6 @@ def genera_pdf_riconciliazione(
     )
   story.append(Spacer(1, 15))
 
-  # 3. Solo Banca
   story.append(
       Paragraph(
           f"<b>🔴 Presenti solo in Banca ({len(soli_banca)})</b>",
@@ -403,28 +399,27 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # TAB 1: ACQUISIZIONE FOTO OTTIMIZZATA
 with tab1:
-  if "camera_attiva" not in st.session_state:
-    st.session_state["camera_attiva"] = False
+  st.subheader("📷 Carica o Scatta Scontrino")
 
-  col_cam1, col_cam2 = st.columns([1, 1])
+  modalita_input = st.radio(
+      "Scegli modalità di acquisizione:",
+      ["📁 Carica File Immagine", "📷 Usa Fotocamera"],
+      horizontal=True,
+  )
 
-  with col_cam1:
-    if st.button("📷 Attiva Fotocamera", use_container_width=True):
-      st.session_state["camera_attiva"] = True
+  foto_scontrino = None
 
-  with col_cam2:
-    if st.session_state["camera_attiva"]:
-      if st.button("🚫 Disattiva Fotocamera", use_container_width=True):
-        st.session_state["camera_attiva"] = False
-        st.rerun()
+  if modalita_input == "📁 Carica File Immagine":
+    foto_scontrino = st.file_uploader(
+        "Carica una foto dello scontrino", type=["jpg", "jpeg", "png", "webp"]
+    )
+  else:
+    foto_scontrino = st.camera_input("Scatta foto allo scontrino")
 
-  foto_scattata = None
-  if st.session_state["camera_attiva"]:
-    foto_scattata = st.camera_input("Scatta una foto allo scontrino")
-
-  if foto_scattata is not None:
-    immagine = Image.open(foto_scattata)
+  if foto_scontrino is not None:
+    immagine = Image.open(foto_scontrino)
     immagine.thumbnail((1024, 1024))
+    st.image(immagine, caption="Scontrino acquisito", use_container_width=True)
 
     if st.button("Analizza e Salva come Uscita", type="primary"):
       with st.spinner("Analisi veloce in corso..."):
@@ -778,7 +773,6 @@ with tab5:
       else:
         df_banca = pd.read_excel(file_banca)
 
-      # Gestione colonne duplicate
       cols = pd.Series(df_banca.columns)
       for dup in cols[cols.duplicated()].unique():
         cols[cols == dup] = [
@@ -865,7 +859,6 @@ with tab5:
           ]
           soli_banca_filtrati = soli_banca_filtrati_df.to_dict(orient="records")
 
-          # Salvataggio dati in session state per export PDF
           st.session_state["esito_riconciliazione"] = {
               "riconciliati": riconciliati,
               "soli_app": soli_app_filtrati,
