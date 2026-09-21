@@ -16,7 +16,12 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 import streamlit as st
 from supabase import Client, create_client
 
-# Libreria di backup per la lettura dei PDF locale senza API
+# Librerie per l'estrazione tabelle da PDF locale
+try:
+  import pdfplumber
+except ImportError:
+  pdfplumber = None
+
 try:
   import pypdf
 except ImportError:
@@ -175,47 +180,93 @@ def elimina_movimento(item_id: int):
     st.error(f"Errore durante l'eliminazione da Supabase: {e}")
 
 
-# --- ESTRAZIONE PDF LOCALE SENZA CONSUMO QUOTA ---
+# --- ESTRAZIONE ROBUSTA LOCALE DA PDF (pdfplumber + pypdf) ---
 def estrai_movimenti_pdf_locale(file_bytes: bytes) -> list:
-  """Esegue un parsing euristico locale sul PDF se l'API va in errore di quota."""
-  if pypdf is None:
-    return []
-
   movimenti = []
-  try:
-    reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-    testo_completo = ""
-    for page in reader.pages:
-      testo_completo += page.extract_text() + "\n"
 
-    # Regex per riconoscere righe del tipo: DD/MM/YYYY Descrizione ... 12,34
-    pattern = re.compile(
-        r"(\d{2}[/\.-]\d{2}[/\.-]\d{2,4})\s+(.*?)\s+(-?\d+[\.,]\d{2})"
-    )
-    matches = pattern.findall(testo_completo)
+  # Metodo 1: Estrazione tabelle strutturate con pdfplumber
+  if pdfplumber is not None:
+    try:
+      with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+          tables = page.extract_tables()
+          for table in tables:
+            for row in table:
+              if not row or len(row) < 2:
+                continue
+              row_str = " ".join([str(cell) for cell in row if cell])
 
-    for m in matches:
-      data_raw, desc, imp_raw = m
-      try:
-        data_clean = datetime.strptime(
-            data_raw.replace(".", "/").replace("-", "/"), "%d/%m/%Y"
-        ).strftime("%Y-%m-%d")
-      except Exception:
-        data_clean = datetime.now().strftime("%Y-%m-%d")
+              # Cerca date (DD/MM/YYYY o DD-MM-YYYY) e importi (es. 12,34 o 1.250,50)
+              data_match = re.search(
+                  r"(\d{2}[/\.-]\d{2}[/\.-]\d{2,4})", row_str
+              )
+              imp_match = re.search(r"(-?\d+(?:\.\d{3})*,\d{2})", row_str)
 
-      imp_clean = abs(float(imp_raw.replace(".", "").replace(",", ".")))
-      movimenti.append({
-          "data": data_clean,
-          "descrizione": desc.strip(),
-          "importo": imp_clean,
-      })
-  except Exception:
-    pass
+              if data_match and imp_match:
+                d_str = data_match.group(1)
+                i_str = imp_match.group(1)
+
+                try:
+                  d_clean = datetime.strptime(
+                      d_str.replace(".", "/").replace("-", "/"), "%d/%m/%Y"
+                  ).strftime("%Y-%m-%d")
+                except Exception:
+                  continue
+
+                imp_clean = abs(
+                    float(i_str.replace(".", "").replace(",", "."))
+                )
+                desc_clean = (
+                    row_str.replace(d_str, "").replace(i_str, "").strip()
+                )
+
+                movimenti.append({
+                    "data": d_clean,
+                    "descrizione": desc_clean if desc_clean else "Movimento Bancario",
+                    "importo": imp_clean,
+                })
+    except Exception:
+      pass
+
+  # Metodo 2: Fallback su pypdf con regex flessibile per righe di testo
+  if not movimenti and pypdf is not None:
+    try:
+      reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+      testo_completo = ""
+      for page in reader.pages:
+        testo_completo += page.extract_text() + "\n"
+
+      linee = testo_completo.split("\n")
+      for linea in linee:
+        data_match = re.search(r"(\d{2}[/\.-]\d{2}[/\.-]\d{2,4})", linea)
+        imp_match = re.search(r"(-?\d+(?:\.\d{3})*,\d{2})", linea)
+
+        if data_match and imp_match:
+          d_str = data_match.group(1)
+          i_str = imp_match.group(1)
+
+          try:
+            d_clean = datetime.strptime(
+                d_str.replace(".", "/").replace("-", "/"), "%d/%m/%Y"
+            ).strftime("%Y-%m-%d")
+          except Exception:
+            continue
+
+          imp_clean = abs(float(i_str.replace(".", "").replace(",", ".")))
+          desc_clean = linea.replace(d_str, "").replace(i_str, "").strip()
+
+          movimenti.append({
+              "data": d_clean,
+              "descrizione": desc_clean if desc_clean else "Movimento Bancario",
+              "importo": imp_clean,
+          })
+    except Exception:
+      pass
 
   return movimenti
 
 
-# --- GENERAZIONE PDF ---
+# --- GENERAZIONE PDF REPORT BILANCIO ---
 def genera_pdf_storico(storico: list) -> bytes:
   buffer = io.BytesIO()
   doc = SimpleDocTemplate(
@@ -665,7 +716,7 @@ with tab5:
             )
             movimenti_estratti = []
 
-            # Tentativo 1: Chiamata API Gemini con Fallback sui Modelli Gratuiti
+            # Tentativo 1: Chiamata API Gemini
             if api_key:
               try:
                 client = genai.Client(api_key=api_key)
@@ -711,11 +762,11 @@ with tab5:
               except Exception:
                 pass
 
-            # Tentativo 2: Fallback Locale con pypdf se le API van in errore di quota
+            # Tentativo 2: Fallback locale strutturato (pdfplumber + pypdf)
             if not movimenti_estratti:
               st.info(
-                  "ℹ️ Quota API esaurita. Utilizzo dell'estrattore PDF locale"
-                  " senza consumo di token..."
+                  "ℹ️ Quota API esaurita o risposta vuota. Utilizzo"
+                  " dell'estrattore PDF locale (pdfplumber/pypdf)..."
               )
               movimenti_estratti = estrai_movimenti_pdf_locale(pdf_bytes)
 
@@ -726,8 +777,8 @@ with tab5:
               )
             else:
               st.error(
-                  "Nessun movimento trovato nel PDF. Assicurati che il PDF"
-                  " contenga testo selezionabile."
+                  "Impossibile estrarre movimenti dal PDF. Assicurati che il PDF"
+                  " non sia un'immagine scansionata."
               )
 
         if "pdf_movimenti_banca" in st.session_state:
@@ -757,7 +808,6 @@ with tab5:
         else:
           df_banca = pd.read_excel(file_banca)
 
-        # Rinomina in modo univoco eventuali colonne con nomi identici nel CSV/Excel
         cols = pd.Series(df_banca.columns)
         for dup in cols[cols.duplicated()].unique():
           cols[cols == dup] = [
@@ -796,7 +846,6 @@ with tab5:
                 df_banca[c_data], errors="coerce"
             )
 
-            # Pulisce l'importo da simboli valuta, punti e virgole
             importo_clean = (
                 df_banca[c_importo]
                 .astype(str)
