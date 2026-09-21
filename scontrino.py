@@ -16,17 +16,6 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 import streamlit as st
 from supabase import Client, create_client
 
-# Librerie per l'estrazione tabelle da PDF locale
-try:
-  import pdfplumber
-except ImportError:
-  pdfplumber = None
-
-try:
-  import pypdf
-except ImportError:
-  pypdf = None
-
 # Configurazione della pagina Streamlit
 st.set_page_config(page_title="Gestione Bilancio & Scontrini", layout="wide")
 
@@ -114,20 +103,6 @@ class VocaleData(BaseModel):
   )
 
 
-class MovimentoBancarioPDF(BaseModel):
-  data: str = Field(description="Data della transazione in formato YYYY-MM-DD")
-  descrizione: str = Field(
-      description="Causale o descrizione del movimento bancario"
-  )
-  importo: float = Field(description="Importo assoluto in euro (valore positivo)")
-
-
-class EstrattoContoPDFData(BaseModel):
-  movimenti: List[MovimentoBancarioPDF] = Field(
-      description="Lista delle transazioni trovate nel documento bancario"
-  )
-
-
 # --- FUNZIONI SUPABASE ---
 def carica_storico() -> list:
   try:
@@ -180,93 +155,7 @@ def elimina_movimento(item_id: int):
     st.error(f"Errore durante l'eliminazione da Supabase: {e}")
 
 
-# --- ESTRAZIONE ROBUSTA LOCALE DA PDF (pdfplumber + pypdf) ---
-def estrai_movimenti_pdf_locale(file_bytes: bytes) -> list:
-  movimenti = []
-
-  # Metodo 1: Estrazione tabelle strutturate con pdfplumber
-  if pdfplumber is not None:
-    try:
-      with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-          tables = page.extract_tables()
-          for table in tables:
-            for row in table:
-              if not row or len(row) < 2:
-                continue
-              row_str = " ".join([str(cell) for cell in row if cell])
-
-              # Cerca date (DD/MM/YYYY o DD-MM-YYYY) e importi (es. 12,34 o 1.250,50)
-              data_match = re.search(
-                  r"(\d{2}[/\.-]\d{2}[/\.-]\d{2,4})", row_str
-              )
-              imp_match = re.search(r"(-?\d+(?:\.\d{3})*,\d{2})", row_str)
-
-              if data_match and imp_match:
-                d_str = data_match.group(1)
-                i_str = imp_match.group(1)
-
-                try:
-                  d_clean = datetime.strptime(
-                      d_str.replace(".", "/").replace("-", "/"), "%d/%m/%Y"
-                  ).strftime("%Y-%m-%d")
-                except Exception:
-                  continue
-
-                imp_clean = abs(
-                    float(i_str.replace(".", "").replace(",", "."))
-                )
-                desc_clean = (
-                    row_str.replace(d_str, "").replace(i_str, "").strip()
-                )
-
-                movimenti.append({
-                    "data": d_clean,
-                    "descrizione": desc_clean if desc_clean else "Movimento Bancario",
-                    "importo": imp_clean,
-                })
-    except Exception:
-      pass
-
-  # Metodo 2: Fallback su pypdf con regex flessibile per righe di testo
-  if not movimenti and pypdf is not None:
-    try:
-      reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-      testo_completo = ""
-      for page in reader.pages:
-        testo_completo += page.extract_text() + "\n"
-
-      linee = testo_completo.split("\n")
-      for linea in linee:
-        data_match = re.search(r"(\d{2}[/\.-]\d{2}[/\.-]\d{2,4})", linea)
-        imp_match = re.search(r"(-?\d+(?:\.\d{3})*,\d{2})", linea)
-
-        if data_match and imp_match:
-          d_str = data_match.group(1)
-          i_str = imp_match.group(1)
-
-          try:
-            d_clean = datetime.strptime(
-                d_str.replace(".", "/").replace("-", "/"), "%d/%m/%Y"
-            ).strftime("%Y-%m-%d")
-          except Exception:
-            continue
-
-          imp_clean = abs(float(i_str.replace(".", "").replace(",", ".")))
-          desc_clean = linea.replace(d_str, "").replace(i_str, "").strip()
-
-          movimenti.append({
-              "data": d_clean,
-              "descrizione": desc_clean if desc_clean else "Movimento Bancario",
-              "importo": imp_clean,
-          })
-    except Exception:
-      pass
-
-  return movimenti
-
-
-# --- GENERAZIONE PDF REPORT BILANCIO ---
+# --- GENERAZIONE PDF REGISTRO GENERALE ---
 def genera_pdf_storico(storico: list) -> bytes:
   buffer = io.BytesIO()
   doc = SimpleDocTemplate(
@@ -341,6 +230,168 @@ def genera_pdf_storico(storico: list) -> bytes:
   return buffer.getvalue()
 
 
+# --- GENERAZIONE PDF REPORT RICONCILIAZIONE BANCARIA ---
+def genera_pdf_riconciliazione(
+    riconciliati: list,
+    soli_app: list,
+    soli_banca: list,
+    c_data_b: str,
+    c_desc_b: str,
+    c_imp_b: str,
+) -> bytes:
+  buffer = io.BytesIO()
+  doc = SimpleDocTemplate(
+      buffer,
+      pagesize=A4,
+      rightMargin=30,
+      leftMargin=30,
+      topMargin=30,
+      bottomMargin=30,
+  )
+  story = []
+  styles = getSampleStyleSheet()
+
+  story.append(
+      Paragraph(
+          "<b>Report Riconciliazione Bancaria</b>", styles["Heading1"]
+      )
+  )
+  story.append(
+      Paragraph(
+          f"<i>Generato il: {datetime.now().strftime('%d/%m/%Y alle %H:%M')}</i>",
+          styles["Normal"],
+      )
+  )
+  story.append(Spacer(1, 15))
+
+  # Summary Table
+  summary_data = [
+      ["Categoria", "Numero Movimenti"],
+      ["🟢 Riconciliati (In entrambi)", str(len(riconciliati))],
+      ["🟡 Presenti solo nell'App", str(len(soli_app))],
+      ["🔴 Presenti solo in Banca", str(len(soli_banca))],
+  ]
+  summary_table = Table(summary_data, colWidths=[300, 200])
+  summary_table.setStyle(
+      TableStyle([
+          ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#31333F")),
+          ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+          ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+          ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+          ("ALIGN", (1, 0), (1, -1), "CENTER"),
+      ])
+  )
+  story.append(summary_table)
+  story.append(Spacer(1, 20))
+
+  # 1. Riconciliati
+  story.append(
+      Paragraph(
+          f"<b>🟢 Movimenti Riconciliati ({len(riconciliati)})</b>",
+          styles["Heading2"],
+      )
+  )
+  if riconciliati:
+    t_data = [["Data Banca", "Data App", "Desc. Banca", "Desc. App", "Importo"]]
+    for item in riconciliati:
+      t_data.append([
+          item["data_banca"],
+          item["data_app"],
+          str(item["desc_banca"])[:25],
+          str(item["desc_app"])[:25],
+          item["importo"],
+      ])
+    t_recon = Table(t_data, colWidths=[70, 70, 150, 150, 80])
+    t_recon.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E7D32")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ALIGN", (4, 0), (4, -1), "RIGHT"),
+        ])
+    )
+    story.append(t_recon)
+  else:
+    story.append(
+        Paragraph("<i>Nessun movimento riconciliato.</i>", styles["Normal"])
+    )
+  story.append(Spacer(1, 15))
+
+  # 2. Solo App
+  story.append(
+      Paragraph(
+          f"<b>🟡 Presenti solo nell'App ({len(soli_app)})</b>",
+          styles["Heading2"],
+      )
+  )
+  if soli_app:
+    t_data = [["Data", "Descrizione / Negozio", "Tipo", "Importo (€)"]]
+    for item in soli_app:
+      t_data.append([
+          str(item["data"]),
+          str(item["negozio"])[:35],
+          item.get("tipo", "Uscita"),
+          f"€ {float(item['totale']):.2f}",
+      ])
+    t_app = Table(t_data, colWidths=[80, 240, 80, 120])
+    t_app.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F57F17")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+        ])
+    )
+    story.append(t_app)
+  else:
+    story.append(
+        Paragraph(
+            "<i>Tutti i movimenti dell'app sono in banca.</i>", styles["Normal"]
+        )
+    )
+  story.append(Spacer(1, 15))
+
+  # 3. Solo Banca
+  story.append(
+      Paragraph(
+          f"<b>🔴 Presenti solo in Banca ({len(soli_banca)})</b>",
+          styles["Heading2"],
+      )
+  )
+  if soli_banca:
+    t_data = [["Data Banca", "Descrizione / Causale", "Importo (€)"]]
+    for item in soli_banca:
+      t_data.append([
+          str(item.get(c_data_b, "")),
+          str(item.get(c_desc_b, ""))[:45],
+          f"€ {item.get(c_imp_b, '')}",
+      ])
+    t_banca = Table(t_data, colWidths=[100, 280, 140])
+    t_banca.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#C62828")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+        ])
+    )
+    story.append(t_banca)
+  else:
+    story.append(
+        Paragraph(
+            "<i>Tutti i movimenti bancari sono stati registrati nell'app.</i>",
+            styles["Normal"],
+        )
+    )
+
+  doc.build(story)
+  buffer.seek(0)
+  return buffer.getvalue()
+
+
 # --- INTERFACCIA APP STREAMLIT ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📷 Scansiona Scontrino",
@@ -398,9 +449,7 @@ with tab1:
         for modello in modelli:
           try:
             response = client.models.generate_content(
-                model=modello,
-                contents=[immagine, prompt],
-                config=config,
+                model=modello, contents=[immagine, prompt], config=config
             )
             dati = response.parsed
             if dati is not None:
@@ -475,9 +524,7 @@ with tab2:
         for modello in modelli:
           try:
             response = client.models.generate_content(
-                model=modello,
-                contents=[part_audio, prompt_vocale],
-                config=config,
+                model=modello, contents=[part_audio, prompt_vocale], config=config
             )
             dati_vocali = response.parsed
             if dati_vocali is not None:
@@ -553,7 +600,7 @@ with tab3:
       else:
         tipo_str = "Entrata" if "Entrata" in m_tipo else "Uscita"
         data_str = m_data.strftime("%Y-%m-%d")
-        salva_movimento(m_negozio, data_str, float(m_totale), tipo=tipo_str)
+        salva_movimento(m_negozio, data_str, float(m_totale), type=tipo_str)
         st.success(f"Registrata {tipo_str}: **{m_negozio}** - € {m_totale:.2f}")
 
 # TAB 4: BILANCIO E TABELLA
@@ -588,7 +635,7 @@ with tab4:
     with col_pdf:
       pdf_bytes = genera_pdf_storico(storico_attuale)
       st.download_button(
-          label="📄 Scarica PDF",
+          label="📄 Scarica PDF Bilancio",
           data=pdf_bytes,
           file_name=f"report_bilancio_{datetime.now().strftime('%Y%m%d')}.pdf",
           mime="application/pdf",
@@ -687,264 +734,203 @@ with tab4:
   else:
     st.info("Nessun movimento registrato in Supabase.")
 
-# TAB 5: RICONCILIAZIONE BANCARIA (CSV, EXCEL & PDF)
+# TAB 5: RICONCILIAZIONE BANCARIA (CSV E EXCEL)
 with tab5:
   st.subheader("🔍 Riconciliazione tra Estratto Conto Bancario e App")
   st.write(
       "Carica il file dell'estratto conto scaricato dalla tua banca (in"
-      " formato **CSV**, **Excel `.xlsx`** o **PDF**)."
+      " formato **CSV** o **Excel `.xlsx`**)."
   )
 
   file_banca = st.file_uploader(
-      "Carica File Estratto Conto", type=["csv", "xlsx", "pdf"]
+      "Carica File Estratto Conto (.csv o .xlsx)", type=["csv", "xlsx"]
   )
   tolleranza_giorni = st.slider(
       "Tolleranza Giorni Data (per la contabilizzazione bancaria)", 0, 7, 3
   )
 
   if file_banca is not None:
-    df_banca = None
-
     try:
-      # CASO 1: FILE PDF
-      if file_banca.name.endswith(".pdf"):
-        if st.button("🤖 Estrai Movimenti da PDF", type="primary"):
-          with st.spinner("Estrazione ed elaborazione del PDF in corso..."):
-            pdf_bytes = file_banca.read()
-            api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
-                "GEMINI_API_KEY"
-            )
-            movimenti_estratti = []
-
-            # Tentativo 1: Chiamata API Gemini
-            if api_key:
-              try:
-                client = genai.Client(api_key=api_key)
-                part_pdf = types.Part.from_bytes(
-                    data=pdf_bytes, mime_type="application/pdf"
-                )
-                config = types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=EstrattoContoPDFData,
-                    temperature=0.1,
-                )
-                prompt_pdf = (
-                    "Analizza questo estratto conto bancario PDF. Estrai tutti i"
-                    " movimenti indicando: data (YYYY-MM-DD), descrizione e"
-                    " importo assoluto."
-                )
-
-                modelli = [
-                    "gemini-2.5-flash",
-                    "gemini-2.0-flash",
-                    "gemini-1.5-flash",
-                ]
-                for modello in modelli:
-                  try:
-                    response = client.models.generate_content(
-                        model=modello,
-                        contents=[part_pdf, prompt_pdf],
-                        config=config,
-                    )
-                    dati_pdf = response.parsed
-                    if dati_pdf and dati_pdf.movimenti:
-                      movimenti_estratti = [
-                          {
-                              "data": m.data,
-                              "descrizione": m.descrizione,
-                              "importo": m.importo,
-                          }
-                          for m in dati_pdf.movimenti
-                      ]
-                      break
-                  except Exception:
-                    continue
-              except Exception:
-                pass
-
-            # Tentativo 2: Fallback locale strutturato (pdfplumber + pypdf)
-            if not movimenti_estratti:
-              st.info(
-                  "ℹ️ Quota API esaurita o risposta vuota. Utilizzo"
-                  " dell'estrattore PDF locale (pdfplumber/pypdf)..."
-              )
-              movimenti_estratti = estrai_movimenti_pdf_locale(pdf_bytes)
-
-            if movimenti_estratti:
-              st.session_state["pdf_movimenti_banca"] = movimenti_estratti
-              st.success(
-                  f"Estratti {len(movimenti_estratti)} movimenti dal PDF!"
-              )
-            else:
-              st.error(
-                  "Impossibile estrarre movimenti dal PDF. Assicurati che il PDF"
-                  " non sia un'immagine scansionata."
-              )
-
-        if "pdf_movimenti_banca" in st.session_state:
-          df_banca = pd.DataFrame(st.session_state["pdf_movimenti_banca"])
-          c_data, c_desc, c_importo = "data", "descrizione", "importo"
-
-      # CASO 2: FILE CSV O EXCEL
+      if file_banca.name.endswith(".csv"):
+        try:
+          df_banca = pd.read_csv(
+              file_banca,
+              sep=None,
+              engine="python",
+              on_bad_lines="skip",
+              encoding="utf-8",
+          )
+        except Exception:
+          file_banca.seek(0)
+          df_banca = pd.read_csv(
+              file_banca,
+              sep=None,
+              engine="python",
+              on_bad_lines="skip",
+              encoding="latin1",
+          )
       else:
-        if file_banca.name.endswith(".csv"):
-          try:
-            df_banca = pd.read_csv(
-                file_banca,
-                sep=None,
-                engine="python",
-                on_bad_lines="skip",
-                encoding="utf-8",
-            )
-          except Exception:
-            file_banca.seek(0)
-            df_banca = pd.read_csv(
-                file_banca,
-                sep=None,
-                engine="python",
-                on_bad_lines="skip",
-                encoding="latin1",
-            )
+        df_banca = pd.read_excel(file_banca)
+
+      # Gestione colonne duplicate
+      cols = pd.Series(df_banca.columns)
+      for dup in cols[cols.duplicated()].unique():
+        cols[cols == dup] = [
+            f"{dup}_{i}" if i != 0 else dup for i in range(sum(cols == dup))
+        ]
+      df_banca.columns = cols
+
+      st.write(
+          "📌 **Seleziona le colonne corrispondenti del tuo file bancario:**"
+      )
+      col_names = list(df_banca.columns)
+
+      col_sel1, col_sel2, col_sel3 = st.columns(3)
+      with col_sel1:
+        c_data = st.selectbox("Colonna Data", col_names)
+      with col_sel2:
+        c_desc = st.selectbox("Colonna Descrizione/Causale", col_names)
+      with col_sel3:
+        c_importo = st.selectbox("Colonna Importo", col_names)
+
+      if st.button("⚡ Avvia Confronto Movimenti", type="primary"):
+        movimenti_db = carica_storico()
+
+        if not movimenti_db:
+          st.warning("Nessun movimento registrato nell'app da confrontare.")
         else:
-          df_banca = pd.read_excel(file_banca)
+          df_db = pd.DataFrame(movimenti_db)
+          df_db["data_dt"] = pd.to_datetime(df_db["data"], errors="coerce")
+          df_db["totale_abs"] = df_db["totale"].astype(float).abs()
 
-        cols = pd.Series(df_banca.columns)
-        for dup in cols[cols.duplicated()].unique():
-          cols[cols == dup] = [
-              f"{dup}_{i}" if i != 0 else dup for i in range(sum(cols == dup))
-          ]
-        df_banca.columns = cols
+          df_banca["data_dt"] = pd.to_datetime(
+              df_banca[c_data], errors="coerce"
+          )
 
-        st.write(
-            "📌 **Seleziona le colonne corrispondenti del tuo file bancario:**"
-        )
-        col_names = list(df_banca.columns)
+          importo_clean = (
+              df_banca[c_importo]
+              .astype(str)
+              .str.replace("€", "")
+              .str.replace(" ", "")
+              .str.replace(".", "")
+              .str.replace(",", ".")
+          )
+          df_banca["totale_abs"] = (
+              pd.to_numeric(importo_clean, errors="coerce").abs()
+          )
 
-        col_sel1, col_sel2, col_sel3 = st.columns(3)
-        with col_sel1:
-          c_data = st.selectbox("Colonna Data", col_names)
-        with col_sel2:
-          c_desc = st.selectbox("Colonna Descrizione/Causale", col_names)
-        with col_sel3:
-          c_importo = st.selectbox("Colonna Importo", col_names)
+          riconciliati = []
+          matched_db_ids = set()
+          matched_banca_idx = set()
 
-      # ESECUZIONE CONFRONTO
-      if df_banca is not None:
-        if file_banca.name.endswith(".pdf") or st.button(
-            "⚡ Avvia Confronto Movimenti", type="primary"
-        ):
-          movimenti_db = carica_storico()
+          for b_idx, b_row in df_banca.iterrows():
+            if pd.isna(b_row["data_dt"]) or pd.isna(b_row["totale_abs"]):
+              continue
 
-          if not movimenti_db:
-            st.warning("Nessun movimento registrato nell'app da confrontare.")
-          else:
-            df_db = pd.DataFrame(movimenti_db)
-            df_db["data_dt"] = pd.to_datetime(df_db["data"], errors="coerce")
-            df_db["totale_abs"] = df_db["totale"].astype(float).abs()
-
-            df_banca["data_dt"] = pd.to_datetime(
-                df_banca[c_data], errors="coerce"
-            )
-
-            importo_clean = (
-                df_banca[c_importo]
-                .astype(str)
-                .str.replace("€", "")
-                .str.replace(" ", "")
-                .str.replace(".", "")
-                .str.replace(",", ".")
-            )
-            df_banca["totale_abs"] = (
-                pd.to_numeric(importo_clean, errors="coerce").abs()
-            )
-
-            riconciliati = []
-            matched_db_ids = set()
-            matched_banca_idx = set()
-
-            for b_idx, b_row in df_banca.iterrows():
-              if pd.isna(b_row["data_dt"]) or pd.isna(b_row["totale_abs"]):
+            for db_item in movimenti_db:
+              db_id = db_item["id"]
+              if db_id in matched_db_ids:
                 continue
 
-              for db_item in movimenti_db:
-                db_id = db_item["id"]
-                if db_id in matched_db_ids:
-                  continue
+              db_dt = pd.to_datetime(db_item["data"])
+              db_totale = abs(float(db_item["totale"]))
 
-                db_dt = pd.to_datetime(db_item["data"])
-                db_totale = abs(float(db_item["totale"]))
+              diff_giorni = abs((b_row["data_dt"] - db_dt).days)
+              if (
+                  abs(b_row["totale_abs"] - db_totale) < 0.01
+                  and diff_giorni <= tolleranza_giorni
+              ):
+                matched_db_ids.add(db_id)
+                matched_banca_idx.add(b_idx)
+                riconciliati.append({
+                    "data_banca": b_row["data_dt"].strftime("%Y-%m-%d"),
+                    "data_app": str(db_item["data"]),
+                    "desc_banca": b_row[c_desc],
+                    "desc_app": db_item["negozio"],
+                    "importo": f"€ {db_totale:.2f}",
+                })
+                break
 
-                diff_giorni = abs((b_row["data_dt"] - db_dt).days)
-                if (
-                    abs(b_row["totale_abs"] - db_totale) < 0.01
-                    and diff_giorni <= tolleranza_giorni
-                ):
-                  matched_db_ids.add(db_id)
-                  matched_banca_idx.add(b_idx)
-                  riconciliati.append({
-                      "data_banca": b_row["data_dt"].strftime("%Y-%m-%d"),
-                      "data_app": str(db_item["data"]),
-                      "desc_banca": b_row[c_desc],
-                      "desc_app": db_item["negozio"],
-                      "importo": f"€ {db_totale:.2f}",
-                  })
-                  break
+          soli_app_filtrati = [
+              x for x in movimenti_db if x["id"] not in matched_db_ids
+          ]
+          soli_banca_filtrati_df = df_banca.iloc[
+              [i for i in range(len(df_banca)) if i not in matched_banca_idx]
+          ]
+          soli_banca_filtrati = soli_banca_filtrati_df.to_dict(orient="records")
 
-            soli_app_filtrati = [
-                x for x in movimenti_db if x["id"] not in matched_db_ids
-            ]
-            soli_banca_filtrati = df_banca.iloc[
-                [i for i in range(len(df_banca)) if i not in matched_banca_idx]
-            ]
-
-            # MOSTRA RISULTATI RICONCILIAZIONE
-            st.divider()
-            st.subheader("📊 Esito della Riconciliazione")
-
-            r1, r2, r3 = st.columns(3)
-            r1.metric("🟢 Riconciliati (In entrambi)", len(riconciliati))
-            r2.metric("🟡 Presenti solo nell'App", len(soli_app_filtrati))
-            r3.metric("🔴 Presenti solo in Banca", len(soli_banca_filtrati))
-
-            sub_t1, sub_t2, sub_t3 = st.tabs([
-                f"🟢 Riconciliati ({len(riconciliati)})",
-                f"🟡 Solo App ({len(soli_app_filtrati)})",
-                f"🔴 Solo Banca ({len(soli_banca_filtrati)})",
-            ])
-
-            with sub_t1:
-              if riconciliati:
-                st.dataframe(
-                    pd.DataFrame(riconciliati), use_container_width=True
-                )
-              else:
-                st.info("Nessuna corrispondenza trovata.")
-
-            with sub_t2:
-              if soli_app_filtrati:
-                st.dataframe(
-                    pd.DataFrame(soli_app_filtrati)[
-                        ["data", "negozio", "tipo", "totale"]
-                    ],
-                    use_container_width=True,
-                )
-              else:
-                st.success(
-                    "Tutti i movimenti dell'app sono stati trovati nell'estratto"
-                    " conto!"
-                )
-
-            with sub_t3:
-              if not soli_banca_filtrati.empty:
-                st.dataframe(
-                    soli_banca_filtrati[[c_data, c_desc, c_importo]],
-                    use_container_width=True,
-                )
-              else:
-                st.success(
-                    "Tutti i movimenti dell'estratto conto bancario sono"
-                    " registrati nell'app!"
-                )
+          # Salvataggio dati in session state per export PDF
+          st.session_state["esito_riconciliazione"] = {
+              "riconciliati": riconciliati,
+              "soli_app": soli_app_filtrati,
+              "soli_banca": soli_banca_filtrati,
+              "c_data": c_data,
+              "c_desc": c_desc,
+              "c_importo": c_importo,
+          }
 
     except Exception as e:
-      st.error(f"Errore nella lettura o elaborazione del file bancario: {e}")
+      st.error(f"Errore nella lettura del file bancario: {e}")
+
+  # MOSTRA ESITO E PULSANTE DOWNLOAD PDF
+  if "esito_riconciliazione" in st.session_state:
+    res = st.session_state["esito_riconciliazione"]
+    st.divider()
+
+    col_res_titolo, col_res_pdf = st.columns([2, 1])
+    with col_res_titolo:
+      st.subheader("📊 Esito della Riconciliazione")
+    with col_res_pdf:
+      pdf_riconciliazione = genera_pdf_riconciliazione(
+          res["riconciliati"],
+          res["soli_app"],
+          res["soli_banca"],
+          res["c_data"],
+          res["c_desc"],
+          res["c_importo"],
+      )
+      st.download_button(
+          label="🖨️ Scarica Report Riconciliazione (PDF)",
+          data=pdf_riconciliazione,
+          file_name=f"report_riconciliazione_{datetime.now().strftime('%Y%m%d')}.pdf",
+          mime="application/pdf",
+          type="primary",
+          use_container_width=True,
+      )
+
+    r1, r2, r3 = st.columns(3)
+    r1.metric("🟢 Riconciliati (In entrambi)", len(res["riconciliati"]))
+    r2.metric("🟡 Presenti solo nell'App", len(res["soli_app"]))
+    r3.metric("🔴 Presenti solo in Banca", len(res["soli_banca"]))
+
+    sub_t1, sub_t2, sub_t3 = st.tabs([
+        f"🟢 Riconciliati ({len(res['riconciliati'])})",
+        f"🟡 Solo App ({len(res['soli_app'])})",
+        f"🔴 Solo Banca ({len(res['soli_banca'])})",
+    ])
+
+    with sub_t1:
+      if res["riconciliati"]:
+        st.dataframe(pd.DataFrame(res["riconciliati"]), use_container_width=True)
+      else:
+        st.info("Nessuna corrispondenza trovata.")
+
+    with sub_t2:
+      if res["soli_app"]:
+        st.dataframe(
+            pd.DataFrame(res["soli_app"])[["data", "negozio", "tipo", "totale"]],
+            use_container_width=True,
+        )
+      else:
+        st.success("Tutti i movimenti dell'app sono presenti in banca!")
+
+    with sub_t3:
+      if res["soli_banca"]:
+        st.dataframe(
+            pd.DataFrame(res["soli_banca"])[
+                [res["c_data"], res["c_desc"], res["c_importo"]]
+            ],
+            use_container_width=True,
+        )
+      else:
+        st.success("Tutti i movimenti bancari sono stati registrati nell'app!")
