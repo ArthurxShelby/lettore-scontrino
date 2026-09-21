@@ -31,7 +31,6 @@ def verifica_password() -> bool:
   st.title("🔒 Accesso Riservato")
   st.write("Inserisci la password per accedere al sistema di gestione bilancio.")
 
-  # Recupera la password dai secrets o dalle variabili d'ambiente
   password_corretta = st.secrets.get("APP_PASSWORD") or os.environ.get(
       "APP_PASSWORD"
   )
@@ -57,7 +56,6 @@ def verifica_password() -> bool:
   return False
 
 
-# Controlla l'accesso prima di caricare il resto dell'applicazione
 if not verifica_password():
   st.stop()
 
@@ -65,7 +63,6 @@ if not verifica_password():
 # --- INIZIO APPLICAZIONE (AUTENTICATA) ---
 st.title("🧾 Gestione Entrate, Uscite e PDF (Supabase)")
 
-# Pulsante per effettuare il Logout nella barra laterale
 with st.sidebar:
   st.write("👤 Sessione Attiva")
   if st.button("🚪 Disconnetti", use_container_width=True):
@@ -84,7 +81,7 @@ def init_supabase() -> Client:
 supabase = init_supabase()
 
 
-# Schema Pydantic per i dati di input da Gemini
+# Schemi Pydantic per i dati strutturati da Gemini
 class ScontrinoData(BaseModel):
   nome_negozio: str = Field(description="Nome dell'esercente")
   data: Optional[str] = Field(
@@ -94,6 +91,26 @@ class ScontrinoData(BaseModel):
       ),
   )
   totale_euro: float = Field(description="Importo totale finale pagato in Euro")
+
+
+class VocaleData(BaseModel):
+  negozio: str = Field(
+      description="Descrizione della spesa, entrata o nome del negozio"
+  )
+  totale: float = Field(description="Importo in euro menzionato nell'audio")
+  tipo: str = Field(
+      description=(
+          "Tipo di movimento: 'Entrata' (se si parla di guadagni, stipendi,"
+          " incassi) o 'Uscita' (se si parla di spese, acquisti, pagamenti)"
+      )
+  )
+  data: Optional[str] = Field(
+      default=None,
+      description=(
+          "Data menzionata nel formato YYYY-MM-DD. Se si riferisce ad 'oggi',"
+          " usa null"
+      ),
+  )
 
 
 # --- FUNZIONI DI GESTIONE SUPABASE ---
@@ -229,8 +246,9 @@ def genera_pdf_storico(storico: list) -> bytes:
 
 
 # --- INTERFACCIA APP STREAMLIT ---
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📷 Scansiona Scontrino (Uscita)",
+    "🎤 Inserimento Vocale",
     "✍️ Inserimento Manuale",
     "📊 Bilancio & Export PDF",
 ])
@@ -261,7 +279,6 @@ with tab1:
 
     if st.button("Analizza e Salva come Uscita", type="primary"):
       with st.spinner("Analisi in corso con Gemini..."):
-        # Elenco modelli attivi da provare
         modelli = ["gemini-3.6-flash", "gemini-3.5-flash"]
         dati = None
         ultimo_errore = None
@@ -314,8 +331,80 @@ with tab1:
               f"Si è verificato un errore durante l'analisi: {ultimo_errore}"
           )
 
-# TAB 2: INSERIMENTO MANUALE
+# TAB 2: INSERIMENTO VOCALE
 with tab2:
+  st.subheader("Registra una nota vocale per la tua spesa o entrata")
+  st.write("Esempio: *'Ho speso 15 euro e 50 al bar per la colazione'* oppure *'Ho incassato 200 euro per una consulenza'*")
+
+  audio_registrato = st.audio_input("Premi il microfono per registrare")
+
+  if audio_registrato is not None:
+    if st.button("🎙️ Analizza ed Estrai Dati", type="primary"):
+      with st.spinner("Ascolto e analisi in corso con Gemini..."):
+        api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get(
+            "GEMINI_API_KEY"
+        )
+        client = genai.Client(api_key=api_key)
+
+        audio_bytes = audio_registrato.read()
+        mime_type = audio_registrato.type or "audio/wav"
+
+        part_audio = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=VocaleData,
+            temperature=0.1,
+        )
+
+        prompt_vocale = (
+            "Ascolta attentamente questo messaggio audio. Estrai la descrizione"
+            " della spesa o entrata, l'importo totale in euro, se si tratta di"
+            " un'Entrata o un'Uscita, e la data se menzionata espressamente."
+        )
+
+        modelli = ["gemini-3.6-flash", "gemini-3.5-flash"]
+        dati_vocali = None
+        ultimo_errore = None
+
+        for modello in modelli:
+          try:
+            response = client.models.generate_content(
+                model=modello,
+                contents=[part_audio, prompt_vocale],
+                config=config,
+            )
+            dati_vocali = response.parsed
+            if dati_vocali is not None:
+              break
+          except Exception as e:
+            ultimo_errore = e
+            continue
+
+        if dati_vocali is not None:
+          data_finale = (
+              dati_vocali.data
+              if dati_vocali.data
+              else datetime.now().strftime("%Y-%m-%d")
+          )
+
+          salva_movimento(
+              dati_vocali.negozio,
+              data_finale,
+              dati_vocali.totale,
+              tipo=dati_vocali.tipo,
+          )
+
+          st.success("Nota vocale elaborata e salvata con successo!")
+          st.metric("Importo", f"€ {dati_vocali.totale:.2f}")
+          st.write(f"**Descrizione:** {dati_vocali.negozio}")
+          st.write(f"**Tipo:** {dati_vocali.tipo}")
+          st.write(f"**Data:** {data_finale}")
+        else:
+          st.error(f"Errore durante l'analisi dell'audio: {ultimo_errore}")
+
+# TAB 3: INSERIMENTO MANUALE
+with tab3:
   st.subheader("Inserisci un'Entrata o un'Uscita")
 
   with st.form("form_inserimento_manuale", clear_on_submit=True):
@@ -347,8 +436,8 @@ with tab2:
             f" {m_totale:.2f} ({data_str})"
         )
 
-# TAB 3: BILANCIO IN TEMPO REALE, MODIFICA & PDF
-with tab3:
+# TAB 4: BILANCIO IN TEMPO REALE, MODIFICA & PDF
+with tab4:
   storico_attuale = carica_storico()
 
   if storico_attuale:
